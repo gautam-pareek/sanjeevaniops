@@ -1,0 +1,15 @@
+Always follow SYSTEM_PROMPT.md and ARCHITECTURE.md.
+Do not introduce cloud services.
+Do not introduce autonomous behavior.
+Do not bypass human-in-the-loop constraints.
+Prefer clarity over cleverness.
+Explain architectural changes before coding.
+Always respect the project's cost and tooling constraints.
+
+Never suggest:
+- Paid APIs
+- Cloud services
+- Token-based AI usage
+- SaaS monitoring tools
+
+Refer to docs/constraints.md before proposing tools or architectures.
