@@ -132,3 +132,33 @@ This implementation provides the foundation for:
 ### License
 
 Internal use only - SanjeevaniOps
+
+# Frontend Dashboard
+
+The project includes a modern, dark-themed web dashboard for interacting with the API.
+
+### Features
+✅ **Complete Dashboard**: Monitor application status and stats
+✅ **Application Management**: Register, update, and delete applications
+✅ **Visual Registration Wizard**: Multi-step form for easy registration
+✅ **History Timeline**: View audit trails for all applications
+✅ **Container Verification**: One-click verification of container status
+✅ **Settings**: Configure operator profile
+
+### Running the Dashboard
+
+1. **Start the Backend** (required)
+   ```bash
+   python -m backend.api.main
+   ```
+
+2. **Open the Dashboard**
+   - Navigate to the `dashboard/` directory
+   - Open `index.html` in any modern web browser
+   - No build step required!
+
+### Dashboard Stack
+- **HTML5**: Semantic structure
+- **CSS3**: Variables, Flexbox/Grid, Glassmorphism
+- **Vanilla JavaScript**: ES6+, Hash Routing, Fetch API
+- **Zero Dependencies**: No frameworks or build tools

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SanjeevaniOps - Application Reliability Dashboard</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading...</p>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Main Layout -->
+    <div class="app-container">
+        
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon"><i class="ph-fill ph-first-aid-kit" style="color: var(--color-primary);"></i></span>
+                    <span class="logo-text">SanjeevaniOps</span>
+                </div>
+                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#dashboard" class="nav-item active" data-route="dashboard">
+                    <span class="nav-icon"><i class="ph ph-chart-bar"></i></span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="#applications" class="nav-item" data-route="applications">
+                    <span class="nav-icon"><i class="ph ph-squares-four"></i></span>
+                    <span class="nav-label">Applications</span>
+                </a>
+                <a href="#register" class="nav-item" data-route="register">
+                    <span class="nav-icon"><i class="ph ph-plus-circle"></i></span>
+                    <span class="nav-label">Register App</span>
+                </a>
+                <a href="#settings" class="nav-item" data-route="settings">
+                    <span class="nav-icon"><i class="ph ph-gear"></i></span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="operator-info">
+                    <span class="operator-icon"><i class="ph ph-user"></i></span>
+                    <span class="operator-name" id="operator-name">admin</span>
+                </div>
+                <div class="status-indicator">
+                    <span class="status-dot" id="api-status"></span>
+                    <span class="status-text" id="api-status-text">Checking...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="content-header">
+                <div class="header-left">
+                    <h1 class="page-title" id="page-title">Dashboard</h1>
+                    <p class="page-subtitle" id="page-subtitle">Monitor and manage your applications</p>
+                </div>
+                <div class="header-right">
+                    <button class="btn btn-icon" id="refresh-btn" aria-label="Refresh">
+                        <span class="icon"><i class="ph ph-arrows-clockwise"></i></span>
+                    </button>
+                    <button class="btn btn-primary" id="quick-register-btn">
+                        <span class="icon"><i class="ph ph-plus"></i></span>
+                        <span>Register App</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content View (Dynamic) -->
+            <div class="content-view" id="content-view">
+                <!-- Views will be rendered here dynamically -->
+                <div class="empty-state">
+                    <div class="empty-icon"><i class="ph ph-rocket-launch"></i></div>
+                    <h3>Loading SanjeevaniOps...</h3>
+                    <p>Please wait while we initialize the dashboard</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal Container -->
+    <div id="modal-container" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal-title">Modal Title</h3>
+                <button class="modal-close" id="modal-close" aria-label="Close modal"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Modal content will be inserted here -->
+            </div>
+            <div class="modal-footer" id="modal-footer">
+                <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+                <button class="btn btn-primary" id="modal-confirm">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="utils.js"></script>
+    <script src="api.js"></script>
+    <script src="components.js"></script>
+    <script src="forms.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
