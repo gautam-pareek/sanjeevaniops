@@ -9,26 +9,41 @@ from contextlib import asynccontextmanager
 
 from backend.core.config import settings
 from backend.core.database import db
-from backend.api.v1 import applications
+from backend.api.v1 import applications, health
+from backend.repositories.application_repository import ApplicationRepository
+from monitoring.monitor_scheduler import scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Lifespan event handler for startup and shutdown.
-    Initializes database schema on startup.
+    Initializes database schema and starts health check scheduler on startup.
     """
     # Startup: Run migrations
     try:
         db.execute_migration("migrations/001_initial_schema.sql")
+        db.execute_migration("migrations/002_health_check_monitoring.sql")
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database initialization failed: {e}")
         raise
-    
+
+    # Startup: Launch health check scheduler and sync all active apps
+    try:
+        scheduler.start()
+        with db.get_connection() as conn:
+            apps, _ = ApplicationRepository().list_applications(conn, status="active", limit=1000, offset=0)
+        scheduler.sync_jobs(apps)
+        print(f"Health check scheduler started — monitoring {len(apps)} application(s)")
+    except Exception as e:
+        print(f"Scheduler startup failed: {e}")
+        raise
+
     yield
-    
-    # Shutdown: Cleanup (if needed)
+
+    # Shutdown: Stop scheduler gracefully
+    scheduler.stop()
     print("Shutting down SanjeevaniOps API")
 
 
@@ -51,6 +66,10 @@ app.add_middleware(
 # Register API routers
 app.include_router(
     applications.router,
+    prefix=settings.api_v1_prefix
+)
+app.include_router(
+    health.router,
     prefix=settings.api_v1_prefix
 )
 
