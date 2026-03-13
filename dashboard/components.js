@@ -8,7 +8,7 @@ const ApplicationCard = {
     /**
      * Render application card for list view
      */
-    render(app) {
+    render(app, healthStatus = null) {
         const statusClass = app.status === 'active' ? 'badge-active' : 'badge-inactive';
         const containerStatus = app.container_info?.status || 'unknown';
 
@@ -21,7 +21,19 @@ const ApplicationCard = {
                             ${Utils.dom.escapeHTML(app.description || 'No description')}
                         </p>
                     </div>
-                    <span class="badge ${statusClass}">${app.status}</span>
+                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-xs);">
+                        ${(() => {
+                            const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+                            if (app.monitoring_paused) {
+                                return '<span style="font-size:var(--font-size-xs);color:var(--color-warning);"><i class="ph ph-pause-circle"></i> Paused</span>';
+                            } else if (!containerRunning) {
+                                return '';
+                            } else {
+                                return '<span class="badge ' + statusClass + '">' + (app.status === 'active' ? 'Monitoring' : 'Unmonitored') + '</span>';
+                            }
+                        })()}
+                        ${app.monitoring_paused ? '' : (healthStatus ? HealthStatusBadge.render(healthStatus) : '')}
+                    </div>
                 </div>
                 <div class="card-body">
                     <div style="display: flex; flex-direction: column; gap: var(--space-sm);">
@@ -38,8 +50,8 @@ const ApplicationCard = {
                             </span>
                         </div>
                         <div style="display: flex; align-items: center; gap: var(--space-sm);">
-                            <span style="opacity: 0.7; color: ${containerStatus === 'running' ? 'var(--color-success)' : 'var(--color-warning)'};">
-                                <i class="ph-fill ${containerStatus === 'running' ? 'ph-check-circle' : 'ph-warning-circle'}"></i>
+                            <span style="opacity: 0.9; color: ${containerStatus === 'running' ? 'var(--color-success)' : containerStatus === 'unknown' ? 'var(--color-text-tertiary)' : 'var(--color-error)'};">
+                                <i class="ph-fill ${containerStatus === 'running' ? 'ph-check-circle' : containerStatus === 'unknown' ? 'ph-circle-dashed' : 'ph-x-circle'}"></i>
                             </span>
                             <span style="font-size: var(--font-size-sm);">
                                 Container: ${Utils.string.capitalize(containerStatus)}
@@ -404,3 +416,149 @@ const Components = {
 };
 
 console.log('Components loaded');
+
+
+// ============================================================================
+// Health Status Components (Feature 3)
+// ============================================================================
+
+const HealthStatusBadge = {
+    /**
+     * Render a compact health status badge for use in cards and lists
+     */
+    render(status) {
+        const config = this._config(status);
+        return `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); background: ${config.bg}; color: ${config.color};">
+            <i class="${config.icon}"></i> ${config.label}
+        </span>`;
+    },
+
+    /**
+     * Render a larger health status panel for the detail view
+     */
+    renderPanel(healthStatus) {
+        if (!healthStatus) {
+            return `<div class="card"><div class="card-body"><p class="text-muted">No health data yet.</p></div></div>`;
+        }
+
+        const config = this._config(healthStatus.current_status);
+        const lastChecked = healthStatus.last_checked_at
+            ? Utils.date.getRelativeTime(healthStatus.last_checked_at)
+            : 'Never';
+        const since = Utils.date.getRelativeTime(healthStatus.status_changed_at);
+
+        return `
+            <div class="card" style="border-left: 4px solid ${config.color};">
+                <div class="card-header">
+                    <h4 class="card-title">Health Status</h4>
+                    ${this.render(healthStatus.current_status)}
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-md);">
+                        <div>
+                            <label class="text-muted" style="font-size: var(--font-size-sm);">Status Since</label>
+                            <p style="font-weight: var(--font-weight-medium); margin-top: var(--space-xs);">${since}</p>
+                        </div>
+                        <div>
+                            <label class="text-muted" style="font-size: var(--font-size-sm);">Last Checked</label>
+                            <p style="font-weight: var(--font-weight-medium); margin-top: var(--space-xs);">${lastChecked}</p>
+                        </div>
+                        <div>
+                            <label class="text-muted" style="font-size: var(--font-size-sm);">Consecutive Failures</label>
+                            <p style="font-weight: var(--font-weight-medium); margin-top: var(--space-xs); color: ${healthStatus.consecutive_failures > 0 ? 'var(--color-error)' : 'inherit'};">
+                                ${healthStatus.consecutive_failures}
+                            </p>
+                        </div>
+                        <div>
+                            <label class="text-muted" style="font-size: var(--font-size-sm);">Consecutive Successes</label>
+                            <p style="font-weight: var(--font-weight-medium); margin-top: var(--space-xs); color: ${healthStatus.consecutive_successes > 0 ? 'var(--color-success)' : 'inherit'};">
+                                ${healthStatus.consecutive_successes}
+                            </p>
+                        </div>
+                    </div>
+                    ${healthStatus.first_failure_at ? `
+                        <div style="margin-top: var(--space-md); padding: var(--space-sm) var(--space-md); background: var(--color-error-subtle, rgba(239,68,68,0.1)); border-radius: var(--radius-sm);">
+                            <span style="font-size: var(--font-size-sm); color: var(--color-error);">
+                                <i class="ph ph-warning"></i> Failing since ${Utils.date.getRelativeTime(healthStatus.first_failure_at)}
+                            </span>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    },
+
+    _config(status) {
+        switch (status) {
+            case 'healthy':
+                return { label: 'Healthy', icon: 'ph-fill ph-check-circle', color: 'var(--color-success)', bg: 'rgba(34,197,94,0.12)' };
+            case 'unhealthy':
+                return { label: 'Unhealthy', icon: 'ph-fill ph-x-circle', color: 'var(--color-error)', bg: 'rgba(239,68,68,0.12)' };
+            case 'error':
+                return { label: 'Error', icon: 'ph-fill ph-warning-circle', color: 'var(--color-warning)', bg: 'rgba(234,179,8,0.12)' };
+            default:
+                return { label: 'Unknown', icon: 'ph ph-circle-dashed', color: 'var(--color-text-tertiary)', bg: 'rgba(148,163,184,0.12)' };
+        }
+    }
+};
+
+
+const HealthHistoryTable = {
+    /**
+     * Render a table of health check results
+     */
+    render(results) {
+        if (!results || results.length === 0) {
+            return EmptyState.render({
+                icon: '<i class="ph ph-heartbeat"></i>',
+                title: 'No Health Checks Yet',
+                message: 'Health check results will appear here once monitoring begins'
+            });
+        }
+
+        return `
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: var(--font-size-sm);">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--color-border);">
+                            <th style="text-align: left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Status</th>
+                            <th style="text-align: left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Time</th>
+                            <th style="text-align: left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Response</th>
+                            <th style="text-align: left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Type</th>
+                            <th style="text-align: left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${results.map(r => this._renderRow(r)).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    },
+
+    _renderRow(result) {
+        const statusConfig = HealthStatusBadge._config(result.status);
+        const responseTime = result.response_time_ms != null ? `${result.response_time_ms}ms` : '—';
+        const error = result.error_message
+            ? `<span style="color: var(--color-error); font-size: var(--font-size-xs);" title="${Utils.dom.escapeHTML(result.error_message)}">
+                <i class="ph ph-warning"></i> ${Utils.dom.escapeHTML(result.error_message.substring(0, 60))}${result.error_message.length > 60 ? '…' : ''}
+               </span>`
+            : '<span style="color: var(--color-text-tertiary);">—</span>';
+
+        return `
+            <tr style="border-bottom: 1px solid var(--color-border);">
+                <td style="padding: var(--space-sm) var(--space-md);">${HealthStatusBadge.render(result.status)}</td>
+                <td style="padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary);">${Utils.date.formatDateTime(result.checked_at)}</td>
+                <td style="padding: var(--space-sm) var(--space-md); font-family: var(--font-family-mono);">${responseTime}</td>
+                <td style="padding: var(--space-sm) var(--space-md); text-transform: uppercase; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">${result.check_type}</td>
+                <td style="padding: var(--space-sm) var(--space-md);">${error}</td>
+            </tr>
+        `;
+    }
+};
+
+// Add to Components export
+Components.HealthStatusBadge = HealthStatusBadge;
+Components.HealthHistoryTable = HealthHistoryTable;
+
+console.log('Health components loaded');

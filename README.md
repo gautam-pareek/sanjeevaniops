@@ -1,92 +1,212 @@
-# SanjeevaniOps - Application Registration API
+# SanjeevaniOps
 
-Local-first, explainable application reliability and recovery system.
+> Local-first, explainable application reliability and recovery system.
 
-## Feature 2: Application Registration API
+---
 
-This implementation provides the complete Application Registration API as specified in the design document.
+## What is SanjeevaniOps?
 
-### Architecture
+SanjeevaniOps monitors your Docker-based applications locally — no cloud, no SaaS, no paid APIs. It detects failures, explains causes, and (with your approval) recovers services. You stay in control at every step.
 
-- **FastAPI**: REST API framework
-- **SQLite**: Local-first database with explicit SQL
-- **Pydantic**: Request/response validation
-- **Docker SDK**: Read-only container inspection
+## Core Principles
 
-### Key Features
+- **Detect failures, do not guess**
+- **Explain causes, do not hallucinate**
+- **Automate only safe, reversible actions**
+- **Escalate to humans on repeated failure**
+- **AI is reasoning-only, never executing**
 
-✅ Explicit application registration (no auto-discovery)
-✅ Comprehensive health check configuration (HTTP, TCP, Exec, Docker Native)
-✅ Recovery policy management
-✅ Optimistic locking for concurrent updates
-✅ Soft-delete pattern
-✅ Immutable audit history
-✅ Container existence verification
-✅ Validation-first approach
+## Hard Constraints
 
-### Installation
+❌ No cloud providers  
+❌ No Kubernetes  
+❌ No autonomous AI execution  
+❌ No paid APIs or SaaS tools  
+✅ Local-first  
+✅ Human-controlled  
+✅ Explainable  
+
+---
+
+## Features
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Application Registration API | ✅ Complete | Register and manage Docker apps |
+| Web Dashboard | ✅ Complete | Dark-themed UI for full management |
+| Health Check Monitoring | ✅ Complete | HTTP, TCP, Exec, Docker Native checks |
+| Recovery Execution Engine | 🔜 Next | Safe, human-approved container recovery |
+| AI Log Analysis | 🔜 Planned | Local LLaMA-powered root cause analysis |
+
+---
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend API | FastAPI + Uvicorn |
+| Database | SQLite (local-first, explicit SQL) |
+| Validation | Pydantic v2 |
+| Container Integration | Docker SDK (read-only) |
+| Health Check Scheduler | APScheduler |
+| Frontend | Vanilla HTML/CSS/JS (zero build step) |
+| AI Engine (planned) | Local LLaMA 3.1 |
+| Automation (planned) | n8n |
+
+---
+
+## Installation
+
+### Prerequisites
+- Python 3.10+
+- Docker (running)
+- pip
+
+### Setup
+
 ```bash
+# Clone the repo
+git clone https://github.com/gautam-pareek/sanjeevaniops.git
+cd sanjeevaniops
+
 # Install dependencies
 pip install -r requirements.txt
-
-# Run database migrations (automatic on startup)
-# Or manually:
-sqlite3 sanjeevaniops.db < migrations/001_initial_schema.sql
 ```
 
-### Running the API
-```bash
-# Development mode
-python backend/api/main.py
+---
 
-# Production mode
+## Running
+
+### Start the Backend
+
+```bash
+# Development (with auto-reload)
+python -m backend.api.main
+
+# Production
 uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-### API Documentation
+On startup you will see:
+```
+Database initialized successfully
+Health check scheduler started — monitoring X application(s)
+```
 
-Once running, visit:
+### Open the Dashboard
+
+1. Navigate to the `dashboard/` folder
+2. Open `index.html` in any modern browser
+3. No build step required
+
+### API Docs
+
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-### Project Structure
+---
+
+## API Reference
+
+### Applications
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/applications` | Register new application |
+| `GET` | `/api/v1/applications` | List applications |
+| `GET` | `/api/v1/applications/{app_id}` | Get application details |
+| `PUT` | `/api/v1/applications/{app_id}` | Update application |
+| `DELETE` | `/api/v1/applications/{app_id}` | Soft delete application |
+| `POST` | `/api/v1/applications/{app_id}/reactivate` | Reactivate deleted app |
+| `POST` | `/api/v1/applications/validate` | Validate registration (dry-run) |
+| `GET` | `/api/v1/applications/{app_id}/verify-container` | Verify container exists |
+| `GET` | `/api/v1/applications/{app_id}/history` | Get change history |
+
+### Health Check Monitoring
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/applications/{app_id}/health/status` | Current health status |
+| `GET` | `/api/v1/applications/{app_id}/health/history` | Paginated check history |
+| `POST` | `/api/v1/applications/{app_id}/health/check` | Trigger manual check |
+| `GET` | `/api/v1/applications/monitoring/summary` | All-apps health overview |
+
+---
+
+## Health Check Types
+
+| Type | Description |
+|------|-------------|
+| `http` | HTTP/HTTPS request — checks status code |
+| `tcp` | TCP port connectivity check |
+| `exec` | Runs a command inside the container — checks exit code |
+| `docker_native` | Reads Docker's own HEALTHCHECK status |
+
+### Health Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `healthy` | Passing checks, within success threshold |
+| `unhealthy` | Failure threshold reached — needs attention |
+| `unknown` | Not yet checked since registration |
+| `error` | Check could not execute (Docker unavailable, etc.) |
+
+---
+
+## Project Structure
+
 ```
-backend/
-├── api/
-│   ├── main.py              # FastAPI application
-│   ├── dependencies.py      # Dependency injection
-│   └── v1/
-│       ├── applications.py  # Application endpoints
-│       └── models/          # Request/response models
-├── core/
-│   ├── config.py            # Configuration
-│   └── database.py          # Database management
-├── services/
-│   ├── application_service.py   # Business logic orchestration
-│   ├── docker_service.py        # Docker inspection
-│   └── validation_service.py   # Validation logic
-├── repositories/
-│   ├── application_repository.py  # Application data access
-│   └── container_cache_repository.py  # Container cache
-└── exceptions/
-    └── custom_exceptions.py  # Domain exceptions
-
-migrations/
-└── 001_initial_schema.sql   # Database schema
+sanjeevaniops/
+├── backend/
+│   ├── api/
+│   │   ├── main.py                  # FastAPI app, startup, routing
+│   │   ├── dependencies.py          # Dependency injection
+│   │   └── v1/
+│   │       ├── applications.py      # Application CRUD endpoints
+│   │       ├── health.py            # Health check endpoints
+│   │       └── models/              # Request/response models
+│   ├── core/
+│   │   ├── config.py                # Settings
+│   │   └── database.py              # SQLite connection management
+│   ├── services/
+│   │   ├── application_service.py   # Application business logic
+│   │   ├── docker_service.py        # Docker inspection (read-only)
+│   │   └── validation_service.py    # Registration validation
+│   ├── repositories/
+│   │   ├── application_repository.py
+│   │   ├── container_cache_repository.py
+│   │   └── health_repository.py     # Health check data access
+│   └── exceptions/
+│       └── custom_exceptions.py
+├── monitoring/
+│   ├── health_checker.py            # Executes health checks
+│   ├── monitor_service.py           # Orchestrates checks + state
+│   └── monitor_scheduler.py        # APScheduler background jobs
+├── dashboard/
+│   ├── index.html                   # Entry point
+│   ├── app.js                       # Routing + views
+│   ├── api.js                       # API client
+│   ├── components.js                # Reusable UI components
+│   ├── forms.js                     # Registration wizard
+│   ├── utils.js                     # Helpers
+│   └── styles.css                   # Design system
+├── migrations/
+│   ├── 001_initial_schema.sql       # Applications + audit tables
+│   └── 002_health_check_monitoring.sql  # Health check tables
+├── docs/
+├── ai_engine/                       # Planned: LLaMA log analysis
+├── automation/                      # Planned: n8n workflows
+├── requirements.txt
+├── PROJECT_STATE.md
+├── ARCHITECTURE.md
+└── SYSTEM_PROMPT.md
 ```
 
-### Design Principles
+---
 
-**Explicit over Implicit**: No auto-discovery, all registrations are manual
-**Validation First**: Comprehensive validation before persistence
-**Audit Trail**: Immutable history of all changes
-**Optimistic Locking**: Version-based concurrency control
-**Human-in-the-Loop**: Operator identity tracked for all operations
-**Safety**: Read-only Docker operations, no autonomous execution
+## Example: Register an Application
 
-### Example Usage
-```python
-# Register an application
+```json
 POST /api/v1/applications
 {
   "name": "my-web-app",
@@ -94,6 +214,9 @@ POST /api/v1/applications
   "health_check": {
     "type": "http",
     "interval_seconds": 30,
+    "timeout_seconds": 5,
+    "failure_threshold": 3,
+    "success_threshold": 1,
     "config": {
       "url": "http://localhost:8080/health",
       "method": "GET",
@@ -103,6 +226,7 @@ POST /api/v1/applications
   "recovery_policy": {
     "enabled": true,
     "max_restart_attempts": 3,
+    "restart_delay_seconds": 60,
     "allowed_actions": ["container_restart"]
   },
   "metadata": {
@@ -112,53 +236,20 @@ POST /api/v1/applications
 }
 ```
 
-### System Constraints
+---
 
-❌ No cloud providers
-❌ No Kubernetes
-❌ No autonomous AI execution
-❌ No AI-driven code modification
-✅ Local-first
-✅ Human-controlled
-✅ Explainable
+## Design Principles
 
-### Next Steps
+**Explicit over Implicit** — No auto-discovery. All registrations are manual.  
+**Validation First** — Comprehensive validation before any persistence.  
+**Audit Trail** — Immutable history of every change.  
+**Optimistic Locking** — Version-based concurrency control.  
+**Human-in-the-Loop** — Operator identity tracked for all operations.  
+**Safety** — Read-only Docker operations. No autonomous execution.  
+**Hysteresis** — Health status only changes after threshold is met, preventing flapping.  
 
-This implementation provides the foundation for:
-- Feature 3: Health Check Monitoring (not yet implemented)
-- Feature 4: Recovery Engine (not yet implemented)
-- Feature 5: AI Log Analysis (not yet implemented)
+---
 
-### License
+## License
 
-Internal use only - SanjeevaniOps
-
-# Frontend Dashboard
-
-The project includes a modern, dark-themed web dashboard for interacting with the API.
-
-### Features
-✅ **Complete Dashboard**: Monitor application status and stats
-✅ **Application Management**: Register, update, and delete applications
-✅ **Visual Registration Wizard**: Multi-step form for easy registration
-✅ **History Timeline**: View audit trails for all applications
-✅ **Container Verification**: One-click verification of container status
-✅ **Settings**: Configure operator profile
-
-### Running the Dashboard
-
-1. **Start the Backend** (required)
-   ```bash
-   python -m backend.api.main
-   ```
-
-2. **Open the Dashboard**
-   - Navigate to the `dashboard/` directory
-   - Open `index.html` in any modern web browser
-   - No build step required!
-
-### Dashboard Stack
-- **HTML5**: Semantic structure
-- **CSS3**: Variables, Flexbox/Grid, Glassmorphism
-- **Vanilla JavaScript**: ES6+, Hash Routing, Fetch API
-- **Zero Dependencies**: No frameworks or build tools
+Internal use only — SanjeevaniOps
