@@ -8,6 +8,7 @@ console.log('SanjeevaniOps Dashboard - Initializing');
 // App state
 const AppState = {
     currentRoute: 'dashboard',
+    healthMap: {},          // app_id -> current_status
     currentOperator: localStorage.getItem('operator') || 'admin',
     apiConnected: false,
     applications: [],
@@ -184,20 +185,39 @@ async function renderDashboardView() {
     try {
         showLoading(true);
 
-        // Fetch summary data
-        const data = await API.applications.list({ status: 'all', limit: 100 });
+        // Fetch summary data and health summary in parallel
+        const [data, healthSummary] = await Promise.all([
+            API.applications.list({ status: 'all', limit: 100 }),
+            API.health.getSummary().catch(() => ({ statuses: [] }))
+        ]);
 
         const total = data.total || 0;
         const active = data.applications.filter(app => app.status === 'active').length;
         const inactive = data.applications.filter(app => app.status === 'inactive').length;
         const recent = data.applications.slice(0, 5);
 
+        // Build health lookup map: app_id -> status
+        const healthMap = {};
+        (healthSummary.statuses || []).forEach(s => { healthMap[s.app_id] = s.current_status; });
+
+        // Cross-reference health status with container state
+        const effectiveHealthMap = {};
+        data.applications.forEach(app => {
+            const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+            const dbStatus = healthMap[app.app_id];
+            effectiveHealthMap[app.app_id] = !containerRunning && dbStatus === 'healthy' ? 'unhealthy' : dbStatus;
+        });
+        const healthyCount = Object.values(effectiveHealthMap).filter(s => s === 'healthy').length;
+        const unhealthyCount = Object.values(effectiveHealthMap).filter(s => s === 'unhealthy').length;
+
         contentView.innerHTML = `
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-lg); margin-bottom: var(--space-2xl);">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-lg); margin-bottom: var(--space-2xl);">
                 ${renderStatCard('<i class="ph ph-stack"></i>', 'Total Applications', total, 'All registered applications')}
-                ${renderStatCard('<i class="ph ph-check-circle"></i>', 'Active', active, 'Currently monitored')}
-                ${renderStatCard('<i class="ph ph-pause-circle"></i>', 'Inactive', inactive, 'Not currently monitored')}
-                ${renderStatCard('<i class="ph ph-plugs"></i>', 'API Status', AppState.apiConnected ? 'Connected' : 'Offline', AppState.apiConnected ? 'Backend is running' : 'Backend not available')}
+                ${renderStatCard('<i class="ph ph-check-circle"></i>', 'Monitoring', active, 'Actively monitored')}
+                ${renderStatCard('<i class="ph ph-heartbeat"></i>', 'Healthy', healthyCount, 'Passing health checks')}
+                ${unhealthyCount > 0
+                    ? renderStatCard('<i class="ph ph-warning-circle"></i>', 'Unhealthy', unhealthyCount, 'Needs attention', 'var(--color-error)')
+                    : renderStatCard('<i class="ph ph-pause-circle"></i>', 'Unmonitored', inactive, 'Not currently monitored')}
             </div>
             
             <div class="card">
@@ -218,8 +238,15 @@ async function renderDashboardView() {
                                             ${Utils.dom.escapeHTML(app.container_name)}
                                         </div>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: var(--space-md);">
-                                        <span class="badge ${app.status === 'active' ? 'badge-active' : 'badge-inactive'}">${app.status}</span>
+                                    <div style="display: flex; align-items: center; gap: var(--space-sm);">
+                                        ${app.monitoring_paused
+                                            ? '<span style="font-size:var(--font-size-xs);color:var(--color-warning);"><i class="ph ph-pause-circle"></i> Paused</span>'
+                                            : Components.HealthStatusBadge.render(effectiveHealthMap[app.app_id] || 'unknown')
+                                        }
+                                        ${(app.container_info?.status || '').toLowerCase() === 'running' && !app.monitoring_paused
+                                            ? '<span class="badge ' + (app.status === 'active' ? 'badge-active' : 'badge-inactive') + '">' + (app.status === 'active' ? 'Monitoring' : 'Unmonitored') + '</span>'
+                                            : ''
+                                        }
                                         <button class="btn btn-icon"><i class="ph ph-arrow-right"></i></button>
                                     </div>
                                 </div>
@@ -245,16 +272,18 @@ async function renderDashboardView() {
 }
 
 // Stat card helper
-function renderStatCard(icon, title, value, subtitle) {
+function renderStatCard(icon, title, value, subtitle, accentColor = null) {
+    const borderStyle = accentColor ? `border-left: 3px solid ${accentColor};` : '';
+    const valueStyle = accentColor ? `color: ${accentColor};` : '';
     return `
-        <div class="card card-glass">
+        <div class="card card-glass" style="${borderStyle}">
             <div style="display: flex; align-items: center; gap: var(--space-md);">
                 <div style="font-size: 3rem;">${icon}</div>
                 <div style="flex: 1;">
                     <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-bottom: var(--space-xs);">
                         ${title}
                     </div>
-                    <div style="font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold);">
+                    <div style="font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); ${valueStyle}">
                         ${value}
                     </div>
                     <div style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-top: var(--space-xs);">
@@ -276,8 +305,21 @@ async function renderApplicationsView() {
     try {
         showLoading(true);
 
-        const data = await API.applications.list(AppState.filters);
+        const [data, healthSummary] = await Promise.all([
+            API.applications.list(AppState.filters),
+            API.health.getSummary().catch(() => ({ statuses: [] }))
+        ]);
         AppState.applications = data.applications || [];
+        // Build health lookup map for card rendering
+        AppState.healthMap = {};
+        (healthSummary.statuses || []).forEach(s => { AppState.healthMap[s.app_id] = s.current_status; });
+        // Override stale 'healthy' status for containers that are not running
+        data.applications.forEach(app => {
+            const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+            if (!containerRunning && AppState.healthMap[app.app_id] === 'healthy') {
+                AppState.healthMap[app.app_id] = 'unhealthy';
+            }
+        });
 
         contentView.innerHTML = `
             <div style="margin-bottom: var(--space-xl);">
@@ -304,7 +346,12 @@ async function renderApplicationsView() {
             
             ${AppState.applications.length > 0 ? `
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: var(--space-lg);">
-                    ${AppState.applications.map(app => Components.ApplicationCard.render(app)).join('')}
+                    ${AppState.applications.map(app => {
+                            const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+                            const dbStatus = AppState.healthMap[app.app_id];
+                            const effectiveStatus = !containerRunning && dbStatus === 'healthy' ? 'unhealthy' : dbStatus;
+                            return Components.ApplicationCard.render(app, effectiveStatus);
+                        }).join('')}
                 </div>
                 ${Components.Pagination.render(
             AppState.filters.offset,
@@ -340,7 +387,12 @@ async function renderApplicationDetailView(appId) {
     try {
         showLoading(true);
 
-        const app = await API.applications.get(appId);
+        // Fetch app data and health status in parallel
+        const [app, healthStatus, healthHistory] = await Promise.all([
+            API.applications.get(appId),
+            API.health.getStatus(appId).catch(() => null),
+            API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] }))
+        ]);
         AppState.currentApp = app;
 
         const statusClass = app.status === 'active' ? 'badge-active' : 'badge-inactive';
@@ -359,8 +411,16 @@ async function renderApplicationDetailView(appId) {
                         <h2 style="margin-bottom: var(--space-sm);">${Utils.dom.escapeHTML(app.name)}</h2>
                         <p class="text-muted">${Utils.dom.escapeHTML(app.description || 'No description')}</p>
                     </div>
-                    <div style="display: flex; gap: var(--space-sm);">
-                        <span class="badge ${statusClass}">${app.status}</span>
+                    <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap; justify-content: flex-end;">
+                        ${(() => {
+                            const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+                            if (app.monitoring_paused) {
+                                return '<span class="badge" style="background:rgba(234,179,8,0.15);color:var(--color-warning);"><i class="ph ph-pause-circle"></i> Monitoring Paused</span>';
+                            } else if (containerRunning) {
+                                return '<span class="badge ' + statusClass + '">' + (app.status === 'active' ? 'Monitoring' : 'Unmonitored') + '</span>';
+                            }
+                            return '';
+                        })()}
                         ${app.deleted_at ? '<span class="badge badge-deleted">Deleted</span>' : ''}
                     </div>
                 </div>
@@ -381,7 +441,12 @@ async function renderApplicationDetailView(appId) {
                         <div>
                             <label class="text-muted" style="font-size: var(--font-size-sm);">Container Status</label>
                             <p style="font-weight: var(--font-weight-medium); margin-top: var(--space-xs);">
-                                ${containerStatus === 'running' ? '<i class="ph-fill ph-check-circle" style="color: var(--color-success)"></i>' : '<i class="ph-fill ph-warning-circle" style="color: var(--color-warning)"></i>'} ${Utils.string.capitalize(containerStatus)}
+                                ${containerStatus === 'running'
+                                    ? '<i class="ph-fill ph-check-circle" style="color: var(--color-success)"></i>'
+                                    : containerStatus === 'unknown'
+                                        ? '<i class="ph-fill ph-circle-dashed" style="color: var(--color-text-tertiary)"></i>'
+                                        : '<i class="ph-fill ph-x-circle" style="color: var(--color-error)"></i>'
+                                } ${Utils.string.capitalize(containerStatus)}
                             </p>
                         </div>
                         <div>
@@ -408,6 +473,29 @@ async function renderApplicationDetailView(appId) {
                 </div>
             </div>
             
+            ${(() => {
+                const containerRunning = (app.container_info?.status || '').toLowerCase() === 'running';
+                const effectiveHealthStatus = healthStatus && !containerRunning && healthStatus.current_status === 'healthy'
+                    ? { ...healthStatus, current_status: 'unhealthy' }
+                    : healthStatus;
+                return Components.HealthStatusBadge.renderPanel(effectiveHealthStatus);
+            })()}
+
+            <div style="display: flex; justify-content: flex-end; gap: var(--space-sm); margin-top: var(--space-md); margin-bottom: var(--space-xl); flex-wrap: wrap;">
+                ${!app.monitoring_paused ? `
+                    <button class="btn btn-secondary" onclick="handleTriggerHealthCheck('${app.app_id}')">
+                        <i class="ph ph-heartbeat"></i> Run Check Now
+                    </button>
+                    <button class="btn btn-secondary" style="color:var(--color-warning);border-color:var(--color-warning);" onclick="handlePauseMonitoring('${app.app_id}')">
+                        <i class="ph ph-pause-circle"></i> Pause Monitoring
+                    </button>
+                ` : `
+                    <button class="btn btn-secondary" style="color:var(--color-success);border-color:var(--color-success);" onclick="handleResumeMonitoring('${app.app_id}')">
+                        <i class="ph ph-play-circle"></i> Resume Monitoring
+                    </button>
+                `}
+            </div>
+
             <div style="display: grid; gap: var(--space-xl); margin-bottom: var(--space-xl);">
                 ${Components.HealthCheckDisplay.render(app.health_check)}
                 ${Components.RecoveryPolicyDisplay.render(app.recovery_policy)}
@@ -451,6 +539,16 @@ async function renderApplicationDetailView(appId) {
                 </div>
             </div>
             
+            <div class="card" style="margin-top: var(--space-xl);">
+                <div class="card-header">
+                    <h4 class="card-title"><i class="ph ph-heartbeat"></i> Health Check History</h4>
+                    <span style="font-size: var(--font-size-sm); color: var(--color-text-tertiary);">Last 20 checks</span>
+                </div>
+                <div class="card-body">
+                    ${Components.HealthHistoryTable.render(healthHistory.results)}
+                </div>
+            </div>
+
             <div style="margin-top: var(--space-xl);">
                 <button class="btn btn-primary" onclick="handleViewHistory('${app.app_id}')">
                     <i class="ph ph-scroll"></i> View Change History
@@ -608,6 +706,39 @@ function handlePageChange(offset) {
 
 function navigateToApp(appId) {
     navigateTo(`app/${appId}`);
+}
+
+async function handlePauseMonitoring(appId) {
+    const reason = prompt('Reason for pausing monitoring (optional):');
+    if (reason === null) return; // user cancelled
+    try {
+        await API.monitoring.pause(appId, reason || null);
+        showToast('Monitoring paused', 'warning');
+        renderApplicationDetailView(appId);
+    } catch (error) {
+        showToast('Failed to pause monitoring: ' + error.message, 'error');
+    }
+}
+
+async function handleResumeMonitoring(appId) {
+    try {
+        await API.monitoring.resume(appId);
+        showToast('Monitoring resumed', 'success');
+        renderApplicationDetailView(appId);
+    } catch (error) {
+        showToast('Failed to resume monitoring: ' + error.message, 'error');
+    }
+}
+
+async function handleTriggerHealthCheck(appId) {
+    try {
+        await API.health.triggerCheck(appId);
+        showToast('Health check triggered — refreshing in 3s...', 'info');
+        // Wait for check to complete then refresh the detail view
+        setTimeout(() => renderApplicationDetailView(appId), 3000);
+    } catch (error) {
+        showToast('Failed to trigger health check: ' + error.message, 'error');
+    }
 }
 
 async function handleVerifyContainer(appId) {
