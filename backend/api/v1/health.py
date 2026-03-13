@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, status, Depends, HTTPException
 from typing import Optional
 import sqlite3
 
-from backend.api.dependencies import get_db_connection
+from backend.api.dependencies import get_db_connection, get_current_operator
 from backend.api.v1.models.health_responses import (
     AppHealthStatusResponse,
     PaginatedHealthHistory,
@@ -157,7 +157,7 @@ def trigger_manual_check(
 # ============================================================================
 
 @router.get(
-    "/health/summary",
+    "/monitoring/summary",
     summary="Health status summary for all apps",
     description="Returns the current health status for every registered application.",
 )
@@ -169,4 +169,87 @@ def get_all_health_statuses(
     return {
         "total": len(statuses),
         "statuses": statuses,
+    }
+
+
+# ============================================================================
+# Monitoring Pause / Resume
+# ============================================================================
+
+from pydantic import BaseModel
+
+class PauseRequest(BaseModel):
+    reason: str | None = None
+
+@router.post(
+    "/{app_id}/monitoring/pause",
+    summary="Pause health check monitoring",
+    description="Stops health checks for this application without deleting it. Use resume to restart.",
+)
+def pause_monitoring(
+    app_id: str,
+    request: PauseRequest = PauseRequest(),
+    conn: sqlite3.Connection = Depends(get_db_connection),
+    operator: str = Depends(get_current_operator),
+):
+    """Pause health check monitoring for an application."""
+    from backend.repositories.application_repository import ApplicationRepository
+    from monitoring.monitor_scheduler import scheduler
+
+    app_repo = ApplicationRepository()
+    app = app_repo.get_application(conn, app_id)
+    if not app:
+        raise ApplicationNotFoundException(app_id)
+
+    if app.get("monitoring_paused"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Monitoring is already paused for this application.",
+        )
+
+    app_repo.set_monitoring_paused(conn, app_id, paused=True, operator=operator, reason=request.reason)
+    scheduler.remove_app(app_id)
+
+    return {
+        "app_id": app_id,
+        "monitoring_paused": True,
+        "paused_by": operator,
+        "reason": request.reason,
+        "message": "Health check monitoring paused. Use POST /monitoring/resume to restart.",
+    }
+
+
+@router.post(
+    "/{app_id}/monitoring/resume",
+    summary="Resume health check monitoring",
+    description="Restarts health checks for a previously paused application.",
+)
+def resume_monitoring(
+    app_id: str,
+    conn: sqlite3.Connection = Depends(get_db_connection),
+    operator: str = Depends(get_current_operator),
+):
+    """Resume health check monitoring for an application."""
+    from backend.repositories.application_repository import ApplicationRepository
+    from monitoring.monitor_scheduler import scheduler
+
+    app_repo = ApplicationRepository()
+    app = app_repo.get_application(conn, app_id)
+    if not app:
+        raise ApplicationNotFoundException(app_id)
+
+    if not app.get("monitoring_paused"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Monitoring is not paused for this application.",
+        )
+
+    app_repo.set_monitoring_paused(conn, app_id, paused=False, operator=operator)
+    interval = app["health_check_config"].get("interval_seconds", 30)
+    scheduler.add_app(app_id, interval)
+
+    return {
+        "app_id": app_id,
+        "monitoring_paused": False,
+        "message": f"Health check monitoring resumed. Checks will run every {interval}s.",
     }

@@ -258,11 +258,11 @@ class ApplicationService:
     ) -> ApplicationResponse:
         """Build ApplicationResponse from data."""
         
-        # Default container info if not available
+        # Default container info if not available (Docker down or container removed)
         if not container_info:
             container_info = {
                 'image': 'unknown',
-                'status': 'not_found',
+                'status': 'not running',
                 'created_at': app_data['registered_at']
             }
         

@@ -18,45 +18,54 @@ class DockerService:
     """Service for Docker container inspection and verification."""
     
     def __init__(self):
-        """Initialize Docker client."""
+        """Initialize Docker client. Fails gracefully if Docker is unavailable."""
         try:
             self.client = docker.from_env()
-            # Test connection
             self.client.ping()
-        except DockerException as e:
-            print(f"Docker initialization failed: {e}")
+            self._available = True
+        except DockerException:
+            self.client = None
+            self._available = False
+
+    def _check_available(self):
+        """Raise if Docker daemon is not available."""
+        if not self._available:
             raise DockerDaemonUnavailableException()
     
     def get_container_by_name(self, container_name: str) -> Optional[Dict[str, Any]]:
         """
         Get container information by name.
-        
-        Returns:
-            Container info dict or None if not found
+        Returns None if not found or Docker is unavailable.
         """
+        if not self._available:
+            return None
         try:
             container = self.client.containers.get(container_name)
             return self._extract_container_info(container)
         except NotFound:
             return None
         except DockerException:
-            raise DockerDaemonUnavailableException()
+            return None
     
     def get_container_by_id(self, container_id: str) -> Optional[Dict[str, Any]]:
         """
         Get container information by ID.
-        
-        Returns:
-            Container info dict or None if not found
+        Returns None if not found or Docker is unavailable.
         """
+        if not self._available:
+            return None
         try:
             container = self.client.containers.get(container_id)
             return self._extract_container_info(container)
         except NotFound:
             return None
         except DockerException:
-            raise DockerDaemonUnavailableException()
+            return None
     
+    def is_docker_available(self) -> bool:
+        """Check if Docker daemon is reachable."""
+        return self._available
+
     def verify_container_exists(self, container_name: str) -> bool:
         """Check if container exists."""
         return self.get_container_by_name(container_name) is not None
@@ -70,27 +79,29 @@ class DockerService:
     
     def container_has_healthcheck(self, container_name: str) -> bool:
         """Check if container has native HEALTHCHECK defined."""
+        if not self._available:
+            return False
         try:
             container = self.client.containers.get(container_name)
             inspect_data = container.attrs
-            
-            # Check if image or container has healthcheck defined
             health_config = inspect_data.get('Config', {}).get('Healthcheck')
             return health_config is not None
         except NotFound:
             return False
         except DockerException:
-            raise DockerDaemonUnavailableException()
+            return False
     
     def get_container_ports(self, container_name: str) -> Dict[str, Any]:
         """Get exposed and published ports for container."""
+        if not self._available:
+            return {}
         try:
             container = self.client.containers.get(container_name)
             return container.attrs.get('NetworkSettings', {}).get('Ports', {})
         except NotFound:
             raise ContainerNotFoundException(container_name)
         except DockerException:
-            raise DockerDaemonUnavailableException()
+            return {}
     
     def _extract_container_info(self, container) -> Dict[str, Any]:
         """Extract relevant container information."""

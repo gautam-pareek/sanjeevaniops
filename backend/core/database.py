@@ -37,7 +37,8 @@ class Database:
         """
         conn = sqlite3.connect(
             self.db_path,
-            isolation_level=None  # Autocommit mode, we'll handle transactions explicitly
+            isolation_level=None,  # Autocommit mode, we'll handle transactions explicitly
+            check_same_thread=False  # FastAPI uses thread pools, connections must cross threads
         )
         
         # Return rows as dictionaries
@@ -55,15 +56,37 @@ class Database:
             conn.close()
     
     def execute_migration(self, migration_file: str):
-        """Execute a SQL migration file."""
+        """
+        Execute a SQL migration file.
+        Handles duplicate column/table errors gracefully so migrations
+        are safe to re-run (idempotent).
+        """
         migration_path = Path(migration_file)
-        
+
         if not migration_path.exists():
             raise FileNotFoundError(f"Migration file not found: {migration_file}")
-        
+
+        sql = migration_path.read_text()
+
+        # Run each statement individually so one "already exists" error
+        # doesn't abort the rest of the migration.
         with self.get_connection() as conn:
-            sql = migration_path.read_text()
-            conn.executescript(sql)
+            for statement in sql.split(";"):
+                statement = statement.strip()
+                if not statement:
+                    continue
+                try:
+                    conn.execute(statement)
+                except sqlite3.OperationalError as e:
+                    err = str(e).lower()
+                    # Ignore safe idempotency errors
+                    if any(msg in err for msg in [
+                        "duplicate column name",
+                        "already exists",
+                        "table already exists",
+                    ]):
+                        continue
+                    raise
 
 
 # Global database instance

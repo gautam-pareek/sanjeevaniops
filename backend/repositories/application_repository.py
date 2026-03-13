@@ -97,7 +97,7 @@ class ApplicationRepository:
             SELECT app_id, name, description, container_name, container_id,
                    status, health_check_config, recovery_policy_config, metadata,
                    registered_at, registered_by, last_updated_at, last_updated_by,
-                   version, deleted_at
+                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason
             FROM applications
             WHERE app_id = ?
         """
@@ -149,7 +149,7 @@ class ApplicationRepository:
             SELECT app_id, name, description, container_name, container_id,
                    status, health_check_config, recovery_policy_config, metadata,
                    registered_at, registered_by, last_updated_at, last_updated_by,
-                   version, deleted_at
+                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason
             FROM applications
             WHERE {where_sql}
             ORDER BY registered_at DESC
@@ -380,6 +380,53 @@ class ApplicationRepository:
         
         return history, total
     
+    def set_monitoring_paused(
+        self,
+        conn: sqlite3.Connection,
+        app_id: str,
+        paused: bool,
+        operator: str,
+        reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Pause or resume health check monitoring for an application.
+
+        Returns:
+            Updated application data
+        Raises:
+            ApplicationNotFoundException: If application not found
+        """
+        current = self.get_application(conn, app_id)
+        if not current:
+            raise ApplicationNotFoundException(app_id)
+
+        now = datetime.now().isoformat()
+
+        if paused:
+            conn.execute("""
+                UPDATE applications
+                SET monitoring_paused = 1,
+                    paused_at = ?,
+                    paused_by = ?,
+                    pause_reason = ?,
+                    last_updated_at = ?,
+                    last_updated_by = ?
+                WHERE app_id = ?
+            """, (now, operator, reason, now, operator, app_id))
+        else:
+            conn.execute("""
+                UPDATE applications
+                SET monitoring_paused = 0,
+                    paused_at = NULL,
+                    paused_by = NULL,
+                    pause_reason = NULL,
+                    last_updated_at = ?,
+                    last_updated_by = ?
+                WHERE app_id = ?
+            """, (now, operator, app_id))
+
+        return self.get_application(conn, app_id)
+
     def _name_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         """Check if application name exists among active applications."""
         cursor = conn.execute(
@@ -426,8 +473,7 @@ class ApplicationRepository:
                 changed_at, changed_by, change_reason
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            history_id, app_id, version, 
-            json.dumps(snapshot, default=lambda o: o.isoformat() if isinstance(o, datetime) else str(o)),
+            history_id, app_id, version, json.dumps(snapshot),
             change_type.value, changed_at, changed_by, change_reason
         ))
     
@@ -448,5 +494,9 @@ class ApplicationRepository:
             'last_updated_at': datetime.fromisoformat(row['last_updated_at']),
             'last_updated_by': row['last_updated_by'],
             'version': row['version'],
-            'deleted_at': datetime.fromisoformat(row['deleted_at']) if row['deleted_at'] else None
+            'deleted_at': datetime.fromisoformat(row['deleted_at']) if row['deleted_at'] else None,
+            'monitoring_paused': bool(row['monitoring_paused']),
+            'paused_at': datetime.fromisoformat(row['paused_at']) if row['paused_at'] else None,
+            'paused_by': row['paused_by'],
+            'pause_reason': row['pause_reason']
         }
