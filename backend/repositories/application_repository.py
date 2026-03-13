@@ -426,7 +426,8 @@ class ApplicationRepository:
                 changed_at, changed_by, change_reason
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            history_id, app_id, version, json.dumps(snapshot),
+            history_id, app_id, version, 
+            json.dumps(snapshot, default=lambda o: o.isoformat() if isinstance(o, datetime) else str(o)),
             change_type.value, changed_at, changed_by, change_reason
         ))
     

@@ -24,6 +24,7 @@ class DockerService:
             # Test connection
             self.client.ping()
         except DockerException as e:
+            print(f"Docker initialization failed: {e}")
             raise DockerDaemonUnavailableException()
     
     def get_container_by_name(self, container_name: str) -> Optional[Dict[str, Any]]:
