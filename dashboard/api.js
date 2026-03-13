@@ -162,3 +162,60 @@ const API = {
 };
 
 console.log('API service loaded - Base URL:', API_BASE_URL);
+
+// Monitoring Pause/Resume API
+const MonitoringAPI = {
+    async pause(appId, reason = null) {
+        return await apiFetch(`/applications/${appId}/monitoring/pause`, {
+            method: 'POST',
+            body: { reason }
+        });
+    },
+    async resume(appId) {
+        return await apiFetch(`/applications/${appId}/monitoring/resume`, {
+            method: 'POST'
+        });
+    }
+};
+API.monitoring = MonitoringAPI;
+
+// Health Check API endpoints
+const HealthAPI = {
+   /**
+    * Get current health status for an application
+    */
+   async getStatus(appId) {
+      return await apiFetch(`/applications/${appId}/health/status`);
+   },
+
+   /**
+    * Get paginated health check history
+    */
+   async getHistory(appId, params = {}) {
+      const { limit = 50, offset = 0, status = null } = params;
+      const queryParams = new URLSearchParams({ limit, offset });
+      if (status) queryParams.append('status', status);
+      return await apiFetch(`/applications/${appId}/health/history?${queryParams}`);
+   },
+
+   /**
+    * Trigger an immediate manual health check
+    */
+   async triggerCheck(appId) {
+      return await apiFetch(`/applications/${appId}/health/check`, {
+         method: 'POST'
+      });
+   },
+
+   /**
+    * Get health status summary for all applications
+    */
+   async getSummary() {
+      return await apiFetch(`/applications/monitoring/summary`);
+   }
+};
+
+// Attach to API object
+API.health = HealthAPI;
+
+console.log('Health API methods loaded');
