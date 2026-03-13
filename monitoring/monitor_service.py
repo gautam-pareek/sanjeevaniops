@@ -18,6 +18,7 @@ from typing import Dict, Any
 from backend.core.database import db
 from backend.repositories.health_repository import HealthRepository
 from backend.repositories.application_repository import ApplicationRepository
+from backend.services.docker_service import DockerService
 from monitoring.health_checker import HealthChecker, CheckResult
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class MonitorService:
         self._checker = HealthChecker()
         self._health_repo = HealthRepository()
         self._app_repo = ApplicationRepository()
+        self._docker = DockerService()
 
     # ------------------------------------------------------------------
     # Public: called by the scheduler for each app
@@ -72,6 +74,10 @@ class MonitorService:
                 logger.debug("Health check skipped — app %s is inactive", app_id)
                 return
 
+            if app.get("monitoring_paused"):
+                logger.debug("Health check skipped — app %s is paused", app_id)
+                return
+
             hc_config: Dict[str, Any] = app["health_check_config"]
             check_type: str = hc_config["type"]
             timeout: int = hc_config.get("timeout_seconds", 5)
@@ -82,6 +88,45 @@ class MonitorService:
             # Merge timeout into the inner config so the checker respects it
             inner_config = dict(hc_config.get("config", {}))
             inner_config["timeout_seconds"] = timeout
+
+            # Check container state first — if not running, immediately unhealthy
+            container_info = self._docker.get_container_by_name(container_name)
+            if container_info is not None and container_info.get("status", "").lower() != "running":
+                result = CheckResult(
+                    status="unhealthy",
+                    response_time_ms=None,
+                    error_message=f"Container is {container_info.get('status', 'not running')} — expected running",
+                )
+                # Persist and update status, then return
+                result_id = self._health_repo.insert_result(
+                    conn=conn,
+                    app_id=app_id,
+                    status=result.status,
+                    check_type=check_type,
+                    check_config=inner_config,
+                    response_time_ms=result.response_time_ms,
+                    error_message=result.error_message,
+                )
+                current_status_row = self._health_repo.get_status(conn, app_id)
+                consecutive_failures = (current_status_row["consecutive_failures"] if current_status_row else 0) + 1
+                first_failure_at = (
+                    current_status_row.get("first_failure_at") if current_status_row and current_status_row.get("first_failure_at")
+                    else __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+                )
+                self._health_repo.upsert_status(
+                    conn=conn,
+                    app_id=app_id,
+                    current_status="unhealthy",
+                    consecutive_failures=consecutive_failures,
+                    consecutive_successes=0,
+                    last_result_id=result_id,
+                    first_failure_at=first_failure_at,
+                )
+                logger.warning(
+                    "[UNHEALTHY] app=%s container=%s — container is %s, skipping check",
+                    app_id, container_name, container_info.get("status"),
+                )
+                return
 
             logger.debug(
                 "Running %s health check for app %s (%s)",
