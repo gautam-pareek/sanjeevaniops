@@ -1,12 +1,24 @@
 # SanjeevaniOps
 
-> Local-first, explainable application reliability and recovery system.
+> Local-first, explainable application reliability and recovery system for Docker containers.
+
+Named after the Sanjeevani herb from Hindu mythology — the herb that revives the dead.
+SanjeevaniOps revives crashed applications.
 
 ---
 
-## What is SanjeevaniOps?
+## What Problem Does It Solve?
 
-SanjeevaniOps monitors your Docker-based applications locally — no cloud, no SaaS, no paid APIs. It detects failures, explains causes, and (with your approval) recovers services. You stay in control at every step.
+Applications and websites crash constantly — traffic overload, broken routes, API failures,
+memory leaks, container crashes. Developers often don't know:
+- **What** crashed
+- **Why** it crashed
+- **How** to fix it fast
+
+SanjeevaniOps monitors your local Docker containers, detects crashes the moment they happen,
+analyzes logs using a local AI, and tells you exactly what went wrong and how to fix it.
+
+---
 
 ## Core Principles
 
@@ -32,11 +44,13 @@ SanjeevaniOps monitors your Docker-based applications locally — no cloud, no S
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Application Registration API | ✅ Complete | Register and manage Docker apps |
+| Application Registration | ✅ Complete | Register and manage Docker apps |
 | Web Dashboard | ✅ Complete | Dark-themed UI for full management |
-| Health Check Monitoring | ✅ Complete | HTTP, TCP, Exec, Docker Native checks |
-| Recovery Execution Engine | 🔜 Next | Safe, human-approved container recovery |
+| Health Check Monitoring | ✅ Complete | HTTP, TCP, Exec, Docker Native + pause/resume |
+| Enhanced Health Checks | 🔄 In Progress | Response time, keywords, endpoints, API, restart count |
+| Log Collection | 🔜 Next | Auto-capture Docker logs on crash |
 | AI Log Analysis | 🔜 Planned | Local LLaMA-powered root cause analysis |
+| Recovery Actions | 🔜 Planned | Human-approved container restart |
 
 ---
 
@@ -50,8 +64,7 @@ SanjeevaniOps monitors your Docker-based applications locally — no cloud, no S
 | Container Integration | Docker SDK (read-only) |
 | Health Check Scheduler | APScheduler |
 | Frontend | Vanilla HTML/CSS/JS (zero build step) |
-| AI Engine (planned) | Local LLaMA 3.1 |
-| Automation (planned) | n8n |
+| AI Engine (planned) | Ollama — LLaMA 3.1 (local only) |
 
 ---
 
@@ -65,11 +78,8 @@ SanjeevaniOps monitors your Docker-based applications locally — no cloud, no S
 ### Setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/gautam-pareek/sanjeevaniops.git
 cd sanjeevaniops
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -80,14 +90,10 @@ pip install -r requirements.txt
 ### Start the Backend
 
 ```bash
-# Development (with auto-reload)
 python -m backend.api.main
-
-# Production
-uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-On startup you will see:
+On startup:
 ```
 Database initialized successfully
 Health check scheduler started — monitoring X application(s)
@@ -130,6 +136,8 @@ Health check scheduler started — monitoring X application(s)
 | `GET` | `/api/v1/applications/{app_id}/health/history` | Paginated check history |
 | `POST` | `/api/v1/applications/{app_id}/health/check` | Trigger manual check |
 | `GET` | `/api/v1/applications/monitoring/summary` | All-apps health overview |
+| `POST` | `/api/v1/applications/{app_id}/monitoring/pause` | Pause monitoring |
+| `POST` | `/api/v1/applications/{app_id}/monitoring/resume` | Resume monitoring |
 
 ---
 
@@ -137,8 +145,8 @@ Health check scheduler started — monitoring X application(s)
 
 | Type | Description |
 |------|-------------|
-| `http` | HTTP/HTTPS request — checks status code |
-| `tcp` | TCP port connectivity check |
+| `http` | HTTP/HTTPS — checks status code, response time, keywords in body |
+| `tcp` | TCP port connectivity |
 | `exec` | Runs a command inside the container — checks exit code |
 | `docker_native` | Reads Docker's own HEALTHCHECK status |
 
@@ -146,10 +154,18 @@ Health check scheduler started — monitoring X application(s)
 
 | Status | Meaning |
 |--------|---------|
-| `healthy` | Passing checks, within success threshold |
+| `healthy` | Passing checks within success threshold |
 | `unhealthy` | Failure threshold reached — needs attention |
 | `unknown` | Not yet checked since registration |
-| `error` | Check could not execute (Docker unavailable, etc.) |
+| `error` | Check could not execute (Docker unavailable etc.) |
+
+### Dashboard Badge Logic
+
+| Situation | Display |
+|-----------|---------|
+| Container running, monitoring active | `Monitoring` + `Healthy/Unhealthy` |
+| Container not running | `Unhealthy` only |
+| Monitoring manually paused | `⏸ Paused` only |
 
 ---
 
@@ -159,43 +175,43 @@ Health check scheduler started — monitoring X application(s)
 sanjeevaniops/
 ├── backend/
 │   ├── api/
-│   │   ├── main.py                  # FastAPI app, startup, routing
-│   │   ├── dependencies.py          # Dependency injection
+│   │   ├── main.py                    # FastAPI app, startup, routing
+│   │   ├── dependencies.py
 │   │   └── v1/
-│   │       ├── applications.py      # Application CRUD endpoints
-│   │       ├── health.py            # Health check endpoints
-│   │       └── models/              # Request/response models
+│   │       ├── applications.py        # CRUD endpoints
+│   │       ├── health.py              # Health + pause/resume endpoints
+│   │       └── models/                # Pydantic request/response models
 │   ├── core/
-│   │   ├── config.py                # Settings
-│   │   └── database.py              # SQLite connection management
+│   │   ├── config.py
+│   │   └── database.py                # SQLite, idempotent migrations
 │   ├── services/
-│   │   ├── application_service.py   # Application business logic
-│   │   ├── docker_service.py        # Docker inspection (read-only)
-│   │   └── validation_service.py    # Registration validation
+│   │   ├── application_service.py
+│   │   ├── docker_service.py          # Read-only, graceful degradation
+│   │   └── validation_service.py
 │   ├── repositories/
 │   │   ├── application_repository.py
 │   │   ├── container_cache_repository.py
-│   │   └── health_repository.py     # Health check data access
+│   │   └── health_repository.py
 │   └── exceptions/
 │       └── custom_exceptions.py
 ├── monitoring/
-│   ├── health_checker.py            # Executes health checks
-│   ├── monitor_service.py           # Orchestrates checks + state
-│   └── monitor_scheduler.py        # APScheduler background jobs
+│   ├── health_checker.py              # Executes health checks
+│   ├── monitor_service.py             # Orchestrates checks + state
+│   └── monitor_scheduler.py          # APScheduler background jobs
 ├── dashboard/
-│   ├── index.html                   # Entry point
-│   ├── app.js                       # Routing + views
-│   ├── api.js                       # API client
-│   ├── components.js                # Reusable UI components
-│   ├── forms.js                     # Registration wizard
-│   ├── utils.js                     # Helpers
-│   └── styles.css                   # Design system
+│   ├── index.html
+│   ├── app.js
+│   ├── api.js
+│   ├── components.js
+│   ├── forms.js
+│   ├── utils.js
+│   └── styles.css
 ├── migrations/
-│   ├── 001_initial_schema.sql       # Applications + audit tables
-│   └── 002_health_check_monitoring.sql  # Health check tables
-├── docs/
-├── ai_engine/                       # Planned: LLaMA log analysis
-├── automation/                      # Planned: n8n workflows
+│   ├── 001_initial_schema.sql
+│   ├── 002_health_check_monitoring.sql
+│   └── 003_monitoring_pause.sql
+├── ai_engine/                         # Planned: Ollama integration
+├── automation/                        # Planned: n8n workflows
 ├── requirements.txt
 ├── PROJECT_STATE.md
 ├── ARCHITECTURE.md
@@ -204,41 +220,7 @@ sanjeevaniops/
 
 ---
 
-## Example: Register an Application
-
-```json
-POST /api/v1/applications
-{
-  "name": "my-web-app",
-  "container_name": "web-app-container",
-  "health_check": {
-    "type": "http",
-    "interval_seconds": 30,
-    "timeout_seconds": 5,
-    "failure_threshold": 3,
-    "success_threshold": 1,
-    "config": {
-      "url": "http://localhost:8080/health",
-      "method": "GET",
-      "expected_status_codes": [200]
-    }
-  },
-  "recovery_policy": {
-    "enabled": true,
-    "max_restart_attempts": 3,
-    "restart_delay_seconds": 60,
-    "allowed_actions": ["container_restart"]
-  },
-  "metadata": {
-    "environment": "production",
-    "criticality": "high"
-  }
-}
-```
-
----
-
-## Design Principles
+## Design Decisions
 
 **Explicit over Implicit** — No auto-discovery. All registrations are manual.  
 **Validation First** — Comprehensive validation before any persistence.  
@@ -247,6 +229,7 @@ POST /api/v1/applications
 **Human-in-the-Loop** — Operator identity tracked for all operations.  
 **Safety** — Read-only Docker operations. No autonomous execution.  
 **Hysteresis** — Health status only changes after threshold is met, preventing flapping.  
+**Container Exited = Immediate Unhealthy** — No waiting for HTTP failure threshold.  
 
 ---
 
