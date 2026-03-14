@@ -537,13 +537,13 @@ const HealthHistoryTable = {
     },
 
     _renderRow(result) {
-        const statusConfig = HealthStatusBadge._config(result.status);
         const responseTime = result.response_time_ms != null ? `${result.response_time_ms}ms` : '—';
-        const error = result.error_message
+        const subChecksHtml = this._renderSubChecks(result.sub_checks);
+        const error = (!result.sub_checks || result.sub_checks.length === 0) && result.error_message
             ? `<span style="color: var(--color-error); font-size: var(--font-size-xs);" title="${Utils.dom.escapeHTML(result.error_message)}">
                 <i class="ph ph-warning"></i> ${Utils.dom.escapeHTML(result.error_message.substring(0, 60))}${result.error_message.length > 60 ? '…' : ''}
                </span>`
-            : '<span style="color: var(--color-text-tertiary);">—</span>';
+            : '';
 
         return `
             <tr style="border-bottom: 1px solid var(--color-border);">
@@ -551,9 +551,22 @@ const HealthHistoryTable = {
                 <td style="padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary);">${Utils.date.formatDateTime(result.checked_at)}</td>
                 <td style="padding: var(--space-sm) var(--space-md); font-family: var(--font-family-mono);">${responseTime}</td>
                 <td style="padding: var(--space-sm) var(--space-md); text-transform: uppercase; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">${result.check_type}</td>
-                <td style="padding: var(--space-sm) var(--space-md);">${error}</td>
+                <td style="padding: var(--space-sm) var(--space-md);">${subChecksHtml || error || '<span style="color:var(--color-text-tertiary);">—</span>'}</td>
             </tr>
         `;
+    },
+
+    _renderSubChecks(subChecks) {
+        if (!subChecks || subChecks.length === 0) return '';
+        return `<div style="display:flex; flex-direction:column; gap:2px;">
+            ${subChecks.map(sc => `
+                <span style="font-size:var(--font-size-xs); display:flex; align-items:center; gap:4px;">
+                    <i class="ph ${sc.passed ? 'ph-check-circle' : 'ph-x-circle'}"
+                       style="color:${sc.passed ? 'var(--color-success)' : 'var(--color-error)'}; flex-shrink:0;"></i>
+                    <span style="color:var(--color-text-secondary); font-weight:500;">${Utils.dom.escapeHTML(sc.name)}:</span>
+                    <span style="color:${sc.passed ? 'var(--color-text-secondary)' : 'var(--color-error)'};">${Utils.dom.escapeHTML(sc.message)}</span>
+                </span>`).join('')}
+        </div>`;
     }
 };
 

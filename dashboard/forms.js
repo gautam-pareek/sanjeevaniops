@@ -274,6 +274,61 @@ const RegistrationWizard = {
                             placeholder="200,201,204"
                             onchange="RegistrationWizard.updateField('health_check.config.expected_status_codes', this.value.split(',').map(n => parseInt(n.trim())))">
                     </div>
+                    <h4 style="margin: var(--space-lg) 0 var(--space-md);">Enhanced Detection</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
+                        <div class="form-group">
+                            <label class="form-label">Warn if response slower than (ms)</label>
+                            <input 
+                                type="number" 
+                                class="form-input" 
+                                value="${config.warn_response_time_ms || 3000}"
+                                min="100" max="30000"
+                                onchange="RegistrationWizard.updateField('health_check.config.warn_response_time_ms', parseInt(this.value))">
+                            <span class="form-hint">Default: 3000ms</span>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Critical if response slower than (ms)</label>
+                            <input 
+                                type="number" 
+                                class="form-input" 
+                                value="${config.critical_response_time_ms || 5000}"
+                                min="100" max="30000"
+                                onchange="RegistrationWizard.updateField('health_check.config.critical_response_time_ms', parseInt(this.value))">
+                            <span class="form-hint">Default: 5000ms</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Additional Endpoints (one per line)</label>
+                        <textarea
+                            class="form-input"
+                            rows="3"
+                            placeholder="/api/health&#10;/about&#10;http://localhost:8080/api/status"
+                            style="resize:vertical;"
+                            onchange="RegistrationWizard.updateField('health_check.config.additional_endpoints', this.value.split('\n').map(s=>s.trim()).filter(Boolean))">${(config.additional_endpoints || []).join('\n')}</textarea>
+                        <span class="form-hint">Check reachability of extra routes (max 5)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
+                        <div class="form-group">
+                            <label class="form-label">Error Keywords in Body</label>
+                            <input 
+                                type="text" 
+                                class="form-input"
+                                value="${(config.error_keywords || []).join(', ')}"
+                                placeholder="error, exception, fatal"
+                                onchange="RegistrationWizard.updateField('health_check.config.error_keywords', this.value.split(',').map(s=>s.trim()).filter(Boolean))">
+                            <span class="form-hint">Leave blank to use defaults</span>
+                        </div>
+                        <div class="form-group" style="display:flex; flex-direction:column; justify-content:center;">
+                            <label class="form-label" style="display:flex; align-items:center; gap:var(--space-sm); cursor:pointer;">
+                                <input 
+                                    type="checkbox"
+                                    ${config.expect_json ? 'checked' : ''}
+                                    onchange="RegistrationWizard.updateField('health_check.config.expect_json', this.checked)">
+                                Expect valid JSON response
+                            </label>
+                            <span class="form-hint">Fails if response body is not valid JSON</span>
+                        </div>
+                    </div>
                 `;
             case 'tcp':
                 return `
