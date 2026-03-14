@@ -1,19 +1,21 @@
 """
-Health checker.
-Executes health checks for each supported type:
-  - HTTP
-  - TCP
-  - Exec (command inside container)
-  - Docker Native (reads Docker's own healthcheck status)
+Health checker — executes all health check types.
 
-All methods return a CheckResult dataclass.
-No side effects — purely runs a check and returns the outcome.
+Checks supported:
+  1. HTTP status code
+  2. HTTP response time threshold (warn >3s, critical >5s)
+  3. HTTP keyword detection in response body
+  4. Container restart count (crash-looping detection)
+  5. Multi-endpoint reachability
+  6. API connectivity + JSON validation
+  + TCP, Exec, Docker Native (unchanged)
 """
 
+import json
 import socket
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import docker
 import requests
@@ -21,18 +23,23 @@ from docker.errors import DockerException, NotFound
 
 
 @dataclass
+class SubCheckResult:
+    name: str
+    passed: bool
+    message: str
+
+
+@dataclass
 class CheckResult:
-    """Result of a single health check execution."""
-    status: str                         # 'healthy' | 'unhealthy' | 'timeout' | 'error'
-    response_time_ms: Optional[int]     # None if check never connected
-    error_message: Optional[str]        # None on success
+    status: str                          # 'healthy' | 'unhealthy' | 'timeout' | 'error'
+    response_time_ms: Optional[int]
+    error_message: Optional[str]
+    sub_checks: List[SubCheckResult] = field(default_factory=list)
 
 
 class HealthChecker:
-    """Executes health checks against registered applications."""
 
     def __init__(self):
-        """Initialise Docker client (used for Exec and Docker Native checks)."""
         try:
             self._docker = docker.from_env()
             self._docker.ping()
@@ -40,282 +47,255 @@ class HealthChecker:
         except DockerException:
             self._docker = None
             self._docker_available = False
+        self._restart_counts: Dict[str, int] = {}
 
-    # ------------------------------------------------------------------
-    # Public dispatch method
-    # ------------------------------------------------------------------
-
-    def run_check(
-        self, check_type: str, config: Dict[str, Any], container_name: str
-    ) -> CheckResult:
-        """
-        Dispatch to the correct check method based on type.
-
-        Args:
-            check_type: 'http' | 'tcp' | 'exec' | 'docker_native'
-            config:     Type-specific config dict (from health_check_config)
-            container_name: Docker container name (needed for exec/docker_native)
-        """
+    def run_check(self, check_type: str, config: Dict[str, Any], container_name: str) -> CheckResult:
         if check_type == "http":
-            return self._check_http(config)
+            return self._check_http(config, container_name)
         elif check_type == "tcp":
             return self._check_tcp(config)
         elif check_type == "exec":
             return self._check_exec(config, container_name)
         elif check_type == "docker_native":
             return self._check_docker_native(container_name)
-        else:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Unknown health check type: {check_type}",
-            )
+        return CheckResult(status="error", response_time_ms=None,
+                           error_message=f"Unknown check type: {check_type}")
 
-    # ------------------------------------------------------------------
-    # HTTP check
-    # ------------------------------------------------------------------
+    # ── HTTP check (enhanced) ─────────────────────────────────────────
 
-    def _check_http(self, config: Dict[str, Any]) -> CheckResult:
-        """
-        Perform an HTTP/HTTPS health check.
-
-        Config keys:
-          url                  (str)       required
-          method               (str)       default GET
-          expected_status_codes ([int])    default [200]
-          headers              (dict)      optional
-          follow_redirects     (bool)      default False
-          timeout_seconds      (int)       default 5
-        """
+    def _check_http(self, config: Dict[str, Any], container_name: str) -> CheckResult:
         url = config["url"]
         method = config.get("method", "GET").upper()
         expected_codes = config.get("expected_status_codes", [200])
         headers = config.get("headers") or {}
         follow_redirects = config.get("follow_redirects", False)
         timeout = config.get("timeout_seconds", 5)
+        warn_ms = config.get("warn_response_time_ms", 3000)
+        critical_ms = config.get("critical_response_time_ms", 5000)
+        error_keywords = config.get("error_keywords") or [
+            "error", "exception", "fatal", "traceback",
+            "500 internal server error", "something went wrong",
+            "service unavailable", "bad gateway"
+        ]
+        additional_endpoints = config.get("additional_endpoints") or []
+        expect_json = config.get("expect_json", False)
+
+        sub_checks: List[SubCheckResult] = []
+        overall_status = "healthy"
+        elapsed_ms = None
 
         start = time.monotonic()
         try:
             response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                allow_redirects=follow_redirects,
-                timeout=timeout,
+                method=method, url=url, headers=headers,
+                allow_redirects=follow_redirects, timeout=timeout,
             )
             elapsed_ms = int((time.monotonic() - start) * 1000)
 
-            if response.status_code in expected_codes:
-                return CheckResult(
-                    status="healthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=None,
-                )
+            # Check 1: Status code
+            status_ok = response.status_code in expected_codes
+            sub_checks.append(SubCheckResult(
+                name="HTTP Status", passed=status_ok,
+                message=f"Status {response.status_code}" + ("" if status_ok else f" — expected {expected_codes}"),
+            ))
+            if not status_ok:
+                overall_status = "unhealthy"
+
+            # Check 2: Response time
+            if elapsed_ms >= critical_ms:
+                sub_checks.append(SubCheckResult(
+                    name="Response Time", passed=False,
+                    message=f"{elapsed_ms}ms — critical (>{critical_ms}ms)",
+                ))
+                overall_status = "unhealthy"
+            elif elapsed_ms >= warn_ms:
+                sub_checks.append(SubCheckResult(
+                    name="Response Time", passed=False,
+                    message=f"{elapsed_ms}ms — slow (>{warn_ms}ms)",
+                ))
+                overall_status = "unhealthy"
             else:
-                return CheckResult(
-                    status="unhealthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=(
-                        f"Unexpected status code {response.status_code}. "
-                        f"Expected one of {expected_codes}."
-                    ),
-                )
+                sub_checks.append(SubCheckResult(
+                    name="Response Time", passed=True,
+                    message=f"{elapsed_ms}ms",
+                ))
+
+            # Check 3: Error keywords in body
+            body_lower = response.text.lower()
+            found = [kw for kw in error_keywords if kw.lower() in body_lower]
+            if found:
+                sub_checks.append(SubCheckResult(
+                    name="Body Keywords", passed=False,
+                    message=f"Error keywords found: {', '.join(found[:3])}",
+                ))
+                overall_status = "unhealthy"
+            else:
+                sub_checks.append(SubCheckResult(
+                    name="Body Keywords", passed=True,
+                    message="No error keywords detected",
+                ))
+
+            # Check 6: JSON validation
+            if expect_json:
+                try:
+                    response.json()
+                    sub_checks.append(SubCheckResult(
+                        name="JSON Response", passed=True, message="Valid JSON"))
+                except (json.JSONDecodeError, ValueError):
+                    sub_checks.append(SubCheckResult(
+                        name="JSON Response", passed=False,
+                        message=f"Invalid JSON — content-type: {response.headers.get('content-type', 'unknown')}",
+                    ))
+                    overall_status = "unhealthy"
 
         except requests.exceptions.Timeout:
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                status="timeout",
-                response_time_ms=elapsed_ms,
-                error_message=f"HTTP request timed out after {timeout}s",
-            )
+            sub_checks.append(SubCheckResult(
+                name="HTTP Status", passed=False, message=f"Timed out after {timeout}s"))
+            return CheckResult(status="timeout", response_time_ms=elapsed_ms,
+                               error_message=f"Request timed out after {timeout}s", sub_checks=sub_checks)
         except requests.exceptions.ConnectionError as e:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Connection error: {str(e)}",
-            )
+            sub_checks.append(SubCheckResult(
+                name="HTTP Status", passed=False, message=f"Connection refused"))
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Connection error: {str(e)[:200]}", sub_checks=sub_checks)
         except Exception as e:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Unexpected error: {str(e)}",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Unexpected error: {str(e)[:200]}", sub_checks=sub_checks)
 
-    # ------------------------------------------------------------------
-    # TCP check
-    # ------------------------------------------------------------------
+        # Check 4: Container restart count
+        rc = self._check_restart_count(container_name)
+        sub_checks.append(rc)
+        if not rc.passed:
+            overall_status = "unhealthy"
+
+        # Check 5: Additional endpoints
+        for ep in additional_endpoints[:5]:
+            ep_url = ep if ep.startswith("http") else f"{url.rstrip('/')}/{ep.lstrip('/')}"
+            ep_result = self._check_single_endpoint(ep_url, timeout)
+            sub_checks.append(ep_result)
+            if not ep_result.passed:
+                overall_status = "unhealthy"
+
+        failed = [sc for sc in sub_checks if not sc.passed]
+        error_msg = " | ".join(f"{sc.name}: {sc.message}" for sc in failed[:3]) if failed else None
+
+        return CheckResult(
+            status=overall_status,
+            response_time_ms=elapsed_ms,
+            error_message=error_msg,
+            sub_checks=sub_checks,
+        )
+
+    def _check_restart_count(self, container_name: str) -> SubCheckResult:
+        if not self._docker_available or not container_name:
+            return SubCheckResult(name="Restart Count", passed=True, message="Skipped")
+        try:
+            container = self._docker.containers.get(container_name)
+            current = container.attrs.get("RestartCount", 0)
+            prev = self._restart_counts.get(container_name, current)
+            self._restart_counts[container_name] = current
+            if current > prev:
+                return SubCheckResult(
+                    name="Restart Count", passed=False,
+                    message=f"Restarted {current - prev}x since last check (total: {current})")
+            return SubCheckResult(
+                name="Restart Count", passed=True, message=f"Stable — {current} total restart(s)")
+        except NotFound:
+            return SubCheckResult(
+                name="Restart Count", passed=False, message=f"Container '{container_name}' not found")
+        except Exception as e:
+            return SubCheckResult(
+                name="Restart Count", passed=True, message=f"Could not check: {str(e)[:80]}")
+
+    def _check_single_endpoint(self, url: str, timeout: int) -> SubCheckResult:
+        try:
+            resp = requests.get(url, timeout=timeout, allow_redirects=True)
+            if resp.status_code < 400:
+                return SubCheckResult(name=f"Endpoint", passed=True,
+                                      message=f"{url} → {resp.status_code} OK")
+            return SubCheckResult(name=f"Endpoint", passed=False,
+                                  message=f"{url} → {resp.status_code}")
+        except requests.exceptions.Timeout:
+            return SubCheckResult(name="Endpoint", passed=False,
+                                  message=f"{url} timed out")
+        except Exception as e:
+            return SubCheckResult(name="Endpoint", passed=False,
+                                  message=f"{url} unreachable — {str(e)[:80]}")
+
+    # ── TCP (unchanged) ───────────────────────────────────────────────
 
     def _check_tcp(self, config: Dict[str, Any]) -> CheckResult:
-        """
-        Perform a TCP port connectivity check.
-
-        Config keys:
-          host             (str)   default 'localhost'
-          port             (int)   required
-          timeout_seconds  (int)   default 5
-        """
         host = config.get("host", "localhost")
         port = config["port"]
         timeout = config.get("timeout_seconds", 5)
-
         start = time.monotonic()
         try:
             with socket.create_connection((host, port), timeout=timeout):
-                elapsed_ms = int((time.monotonic() - start) * 1000)
-                return CheckResult(
-                    status="healthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=None,
-                )
+                return CheckResult(status="healthy",
+                                   response_time_ms=int((time.monotonic() - start) * 1000),
+                                   error_message=None)
         except socket.timeout:
-            elapsed_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                status="timeout",
-                response_time_ms=elapsed_ms,
-                error_message=f"TCP connection timed out after {timeout}s",
-            )
+            return CheckResult(status="timeout",
+                               response_time_ms=int((time.monotonic() - start) * 1000),
+                               error_message=f"TCP timed out after {timeout}s")
         except ConnectionRefusedError:
-            return CheckResult(
-                status="unhealthy",
-                response_time_ms=None,
-                error_message=f"Connection refused on {host}:{port}",
-            )
+            return CheckResult(status="unhealthy", response_time_ms=None,
+                               error_message=f"Connection refused on {host}:{port}")
         except Exception as e:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"TCP check error: {str(e)}",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"TCP error: {str(e)}")
 
-    # ------------------------------------------------------------------
-    # Exec check
-    # ------------------------------------------------------------------
+    # ── Exec (unchanged) ──────────────────────────────────────────────
 
-    def _check_exec(
-        self, config: Dict[str, Any], container_name: str
-    ) -> CheckResult:
-        """
-        Run a command inside the container and check exit code.
-
-        Config keys:
-          command              (str)   required
-          expected_exit_code   (int)   default 0
-          timeout_seconds      (int)   default 5
-        """
+    def _check_exec(self, config: Dict[str, Any], container_name: str) -> CheckResult:
         if not self._docker_available:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message="Docker daemon unavailable — cannot run exec check",
-            )
-
-        command = config["command"]
-        expected_exit = config.get("expected_exit_code", 0)
-        timeout = config.get("timeout_seconds", 5)
-
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message="Docker unavailable")
         start = time.monotonic()
         try:
             container = self._docker.containers.get(container_name)
             exit_code, output = container.exec_run(
-                cmd=command,
-                demux=False,
-                timeout=timeout,
-            )
+                cmd=config["command"], demux=False,
+                timeout=config.get("timeout_seconds", 5))
             elapsed_ms = int((time.monotonic() - start) * 1000)
-
-            if exit_code == expected_exit:
-                return CheckResult(
-                    status="healthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=None,
-                )
-            else:
-                output_str = output.decode("utf-8", errors="replace").strip() if output else ""
-                return CheckResult(
-                    status="unhealthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=(
-                        f"Exit code {exit_code} (expected {expected_exit}). "
-                        f"Output: {output_str[:200]}"
-                    ),
-                )
-
+            expected = config.get("expected_exit_code", 0)
+            if exit_code == expected:
+                return CheckResult(status="healthy", response_time_ms=elapsed_ms, error_message=None)
+            out = output.decode("utf-8", errors="replace").strip()[:200] if output else ""
+            return CheckResult(status="unhealthy", response_time_ms=elapsed_ms,
+                               error_message=f"Exit code {exit_code}. Output: {out}")
         except NotFound:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Container '{container_name}' not found",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Container '{container_name}' not found")
         except Exception as e:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Exec check error: {str(e)}",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Exec error: {str(e)}")
 
-    # ------------------------------------------------------------------
-    # Docker Native check
-    # ------------------------------------------------------------------
+    # ── Docker Native (unchanged) ─────────────────────────────────────
 
     def _check_docker_native(self, container_name: str) -> CheckResult:
-        """
-        Read Docker's own HEALTHCHECK status from container inspect.
-
-        Docker health states: 'healthy' | 'unhealthy' | 'starting' | 'none'
-        """
         if not self._docker_available:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message="Docker daemon unavailable — cannot read native health status",
-            )
-
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message="Docker unavailable")
         start = time.monotonic()
         try:
             container = self._docker.containers.get(container_name)
             health = container.attrs.get("State", {}).get("Health")
             elapsed_ms = int((time.monotonic() - start) * 1000)
-
             if health is None:
-                return CheckResult(
-                    status="error",
-                    response_time_ms=elapsed_ms,
-                    error_message="Container has no HEALTHCHECK defined in its image",
-                )
-
-            docker_status = health.get("Status", "none").lower()
-
-            if docker_status == "healthy":
-                return CheckResult(
-                    status="healthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=None,
-                )
-            elif docker_status == "starting":
-                return CheckResult(
-                    status="unhealthy",
-                    response_time_ms=elapsed_ms,
-                    error_message="Container health check is still starting up",
-                )
-            else:
-                # Get last log entry from Docker for context
-                logs = health.get("Log") or []
-                last_output = logs[-1].get("Output", "").strip() if logs else ""
-                return CheckResult(
-                    status="unhealthy",
-                    response_time_ms=elapsed_ms,
-                    error_message=f"Docker status: {docker_status}. {last_output[:200]}",
-                )
-
+                return CheckResult(status="error", response_time_ms=elapsed_ms,
+                                   error_message="No HEALTHCHECK defined in image")
+            status = health.get("Status", "none").lower()
+            if status == "healthy":
+                return CheckResult(status="healthy", response_time_ms=elapsed_ms, error_message=None)
+            logs = health.get("Log") or []
+            last = logs[-1].get("Output", "").strip()[:200] if logs else ""
+            return CheckResult(status="unhealthy", response_time_ms=elapsed_ms,
+                               error_message=f"Docker status: {status}. {last}")
         except NotFound:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Container '{container_name}' not found",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Container '{container_name}' not found")
         except Exception as e:
-            return CheckResult(
-                status="error",
-                response_time_ms=None,
-                error_message=f"Docker native check error: {str(e)}",
-            )
+            return CheckResult(status="error", response_time_ms=None,
+                               error_message=f"Docker native error: {str(e)}")
