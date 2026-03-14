@@ -5,6 +5,7 @@ FastAPI routes for health status and history.
 
 from fastapi import APIRouter, Query, status, Depends, HTTPException
 from typing import Optional
+import json
 import sqlite3
 
 from backend.api.dependencies import get_db_connection, get_current_operator
@@ -105,8 +106,21 @@ def get_health_history(
         status_filter=status_filter,
     )
 
+    def _enrich_result(r):
+        """Extract sub_checks from check_config JSON if present."""
+        data = dict(r)
+        try:
+            config = json.loads(data.get("check_config", "{}")) if isinstance(data.get("check_config"), str) else data.get("check_config", {})
+            sub_checks_raw = config.pop("sub_checks", None)
+            data["check_config"] = config
+            if sub_checks_raw:
+                data["sub_checks"] = sub_checks_raw
+        except Exception:
+            pass
+        return HealthCheckResultResponse(**data)
+
     return PaginatedHealthHistory(
-        results=[HealthCheckResultResponse(**r) for r in results],
+        results=[_enrich_result(r) for r in results],
         total=total,
         limit=limit,
         offset=offset,

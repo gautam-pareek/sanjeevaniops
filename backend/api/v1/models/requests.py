@@ -21,31 +21,64 @@ from backend.api.v1.models.enums import (
 # ============================================================================
 
 class HttpHealthCheckConfig(BaseModel):
-    """HTTP health check configuration."""
+    """HTTP health check configuration with enhanced detection."""
     url: str = Field(..., min_length=1, max_length=500)
     method: HttpMethod = HttpMethod.GET
     expected_status_codes: List[int] = Field(default=[200])
     headers: Optional[Dict[str, str]] = None
     follow_redirects: bool = False
-    
+
+    # Check 2: Response time thresholds (ms)
+    warn_response_time_ms: int = Field(default=3000, ge=100, le=30000)
+    critical_response_time_ms: int = Field(default=5000, ge=100, le=30000)
+
+    # Check 3: Error keywords in response body
+    error_keywords: Optional[List[str]] = Field(
+        default=None,
+        description="Keywords that indicate an error page. Defaults to common error strings."
+    )
+
+    # Check 5: Additional endpoints to verify
+    additional_endpoints: Optional[List[str]] = Field(
+        default=None,
+        description="Extra URLs or paths to check reachability. e.g. ['/about', '/api/health']"
+    )
+
+    # Check 6: Expect valid JSON response
+    expect_json: bool = Field(
+        default=False,
+        description="If True, response body must be valid JSON."
+    )
+
     @field_validator('url')
     @classmethod
     def validate_url(cls, v: str) -> str:
-        """Ensure URL is properly formatted."""
         if not v.startswith(('http://', 'https://')):
             raise ValueError("URL must start with http:// or https://")
         return v
-    
+
     @field_validator('expected_status_codes')
     @classmethod
     def validate_status_codes(cls, v: List[int]) -> List[int]:
-        """Ensure status codes are valid HTTP status codes."""
         if not v:
             raise ValueError("At least one expected status code required")
         for code in v:
             if code < 100 or code > 599:
                 raise ValueError(f"Invalid HTTP status code: {code}")
         return v
+
+    @field_validator('additional_endpoints')
+    @classmethod
+    def validate_endpoints_length(cls, v):
+        if v and len(v) > 5:
+            raise ValueError("Maximum 5 additional endpoints allowed")
+        return v
+
+    @model_validator(mode='after')
+    def validate_response_time_thresholds(self):
+        if self.warn_response_time_ms >= self.critical_response_time_ms:
+            raise ValueError("warn_response_time_ms must be less than critical_response_time_ms")
+        return self
 
 
 class TcpHealthCheckConfig(BaseModel):

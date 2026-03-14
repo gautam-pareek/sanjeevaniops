@@ -6,6 +6,13 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
 
+class SubCheckResultResponse(BaseModel):
+    """Result of a single sub-check."""
+    name: str
+    passed: bool
+    message: str
+
+
 class HealthCheckResultResponse(BaseModel):
     """Single health check result."""
     result_id: str
@@ -16,6 +23,7 @@ class HealthCheckResultResponse(BaseModel):
     check_type: str
     check_config: Dict[str, Any]
     checked_at: str
+    sub_checks: Optional[List[SubCheckResultResponse]] = None
 
 
 class AppHealthStatusResponse(BaseModel):

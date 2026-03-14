@@ -26,6 +26,7 @@ class HealthRepository:
         check_config: Dict[str, Any],
         response_time_ms: Optional[int] = None,
         error_message: Optional[str] = None,
+        sub_checks: Optional[list] = None,
     ) -> str:
         """
         Insert a new health check result.
@@ -35,6 +36,14 @@ class HealthRepository:
         """
         result_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+
+        # Serialize sub_checks into check_config for storage
+        config_with_sub = dict(check_config)
+        if sub_checks:
+            config_with_sub["sub_checks"] = [
+                {"name": sc.name, "passed": sc.passed, "message": sc.message}
+                for sc in sub_checks
+            ]
 
         conn.execute(
             """
@@ -50,7 +59,7 @@ class HealthRepository:
                 response_time_ms,
                 error_message,
                 check_type,
-                json.dumps(check_config),
+                json.dumps(config_with_sub),
                 now,
             ),
         )
