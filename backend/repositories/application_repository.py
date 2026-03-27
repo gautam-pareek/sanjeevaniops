@@ -473,7 +473,7 @@ class ApplicationRepository:
                 changed_at, changed_by, change_reason
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            history_id, app_id, version, json.dumps(snapshot),
+            history_id, app_id, version, json.dumps(snapshot, default=str),
             change_type.value, changed_at, changed_by, change_reason
         ))
     
