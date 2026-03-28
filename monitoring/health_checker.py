@@ -64,6 +64,10 @@ class HealthChecker:
     # ── HTTP check (enhanced) ─────────────────────────────────────────
 
     def _check_http(self, config: Dict[str, Any], container_name: str) -> CheckResult:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug("_check_http config keys: %s", list(config.keys()))
+
         url = config["url"]
         method = config.get("method", "GET").upper()
         expected_codes = config.get("expected_status_codes", [200])
@@ -72,6 +76,7 @@ class HealthChecker:
         timeout = config.get("timeout_seconds", 5)
         warn_ms = config.get("warn_response_time_ms", 3000)
         critical_ms = config.get("critical_response_time_ms", 5000)
+        # Always run keyword check — use config value or safe defaults
         error_keywords = config.get("error_keywords") or [
             "error", "exception", "fatal", "traceback",
             "500 internal server error", "something went wrong",
@@ -172,7 +177,7 @@ class HealthChecker:
         # Check 5: Additional endpoints
         for ep in additional_endpoints[:5]:
             ep_url = ep if ep.startswith("http") else f"{url.rstrip('/')}/{ep.lstrip('/')}"
-            ep_result = self._check_single_endpoint(ep_url, timeout)
+            ep_result = self._check_single_endpoint(ep_url, timeout, error_keywords)
             sub_checks.append(ep_result)
             if not ep_result.passed:
                 overall_status = "unhealthy"
@@ -208,14 +213,32 @@ class HealthChecker:
             return SubCheckResult(
                 name="Restart Count", passed=True, message=f"Could not check: {str(e)[:80]}")
 
-    def _check_single_endpoint(self, url: str, timeout: int) -> SubCheckResult:
+    def _check_single_endpoint(
+        self, url: str, timeout: int, error_keywords: list = None
+    ) -> SubCheckResult:
         try:
             resp = requests.get(url, timeout=timeout, allow_redirects=True)
-            if resp.status_code < 400:
-                return SubCheckResult(name=f"Endpoint", passed=True,
-                                      message=f"{url} → {resp.status_code} OK")
-            return SubCheckResult(name=f"Endpoint", passed=False,
-                                  message=f"{url} → {resp.status_code}")
+
+            # Status code check
+            if resp.status_code >= 400:
+                return SubCheckResult(name="Endpoint", passed=False,
+                                      message=f"{url} → {resp.status_code}")
+
+            # Body keyword check — catches error pages that return 200
+            keywords = error_keywords or [
+                "internal server error", "typeerror", "exception",
+                "traceback", "fatal", "something went wrong",
+                "uncaught", "unhandled", "service unavailable",
+                "bad gateway", "payment", "500"
+            ]
+            body_lower = resp.text.lower()
+            found = [kw for kw in keywords if kw.lower() in body_lower]
+            if found:
+                return SubCheckResult(name="Endpoint", passed=False,
+                                      message=f"{url} → 200 but body contains error: '{found[0]}'")
+
+            return SubCheckResult(name="Endpoint", passed=True,
+                                  message=f"{url} → {resp.status_code} OK")
         except requests.exceptions.Timeout:
             return SubCheckResult(name="Endpoint", passed=False,
                                   message=f"{url} timed out")

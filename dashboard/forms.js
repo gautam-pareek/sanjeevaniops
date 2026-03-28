@@ -24,7 +24,16 @@ const RegistrationWizard = {
                 timeout_seconds: 5,
                 failure_threshold: 3,
                 success_threshold: 1,
-                config: {}
+                config: {
+                    url: '',
+                    method: 'GET',
+                    expected_status_codes: [200],
+                    warn_response_time_ms: 3000,
+                    critical_response_time_ms: 5000,
+                    error_keywords: [],
+                    additional_endpoints: [],
+                    expect_json: false
+                }
             },
             recovery_policy: {
                 enabled: false,
@@ -301,10 +310,11 @@ const RegistrationWizard = {
                         <label class="form-label">Additional Endpoints (one per line)</label>
                         <textarea
                             class="form-input"
+                            id="additional-endpoints-input"
                             rows="3"
                             placeholder="/api/health&#10;/about&#10;http://localhost:8080/api/status"
                             style="resize:vertical;"
-                            onchange="RegistrationWizard.updateField('health_check.config.additional_endpoints', this.value.split('\n').map(s=>s.trim()).filter(Boolean))">${(config.additional_endpoints || []).join('\n')}</textarea>
+                            oninput="RegistrationWizard.updateField('health_check.config.additional_endpoints', this.value.split('\n').map(s=>s.trim()).filter(Boolean))">${(config.additional_endpoints || []).join('\n')}</textarea>
                         <span class="form-hint">Check reachability of extra routes (max 5)</span>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
@@ -313,9 +323,10 @@ const RegistrationWizard = {
                             <input 
                                 type="text" 
                                 class="form-input"
+                                id="error-keywords-input"
                                 value="${(config.error_keywords || []).join(', ')}"
                                 placeholder="error, exception, fatal"
-                                onchange="RegistrationWizard.updateField('health_check.config.error_keywords', this.value.split(',').map(s=>s.trim()).filter(Boolean))">
+                                oninput="RegistrationWizard.updateField('health_check.config.error_keywords', this.value.split(',').map(s=>s.trim()).filter(Boolean))">
                             <span class="form-hint">Leave blank to use defaults</span>
                         </div>
                         <div class="form-group" style="display:flex; flex-direction:column; justify-content:center;">
@@ -558,11 +569,39 @@ const RegistrationWizard = {
 
     updateHealthCheckType(type) {
         this.formData.health_check.type = type;
-        this.formData.health_check.config = {};
+        if (type === 'http') {
+            this.formData.health_check.config = {
+                url: '',
+                method: 'GET',
+                expected_status_codes: [200],
+                warn_response_time_ms: 3000,
+                critical_response_time_ms: 5000,
+                error_keywords: [],
+                additional_endpoints: [],
+                expect_json: false
+            };
+        } else {
+            this.formData.health_check.config = {};
+        }
         this.refresh();
     },
 
+    collectCurrentStepValues() {
+        // Read values from DOM before refresh destroys them
+        if (this.currentStep === 2 && this.formData.health_check.type === 'http') {
+            const epEl = document.getElementById('additional-endpoints-input');
+            if (epEl && epEl.value.trim()) {
+                this.formData.health_check.config.additional_endpoints = epEl.value.split('\n').map(s => s.trim()).filter(Boolean);
+            }
+            const kwEl = document.getElementById('error-keywords-input');
+            if (kwEl && kwEl.value.trim()) {
+                this.formData.health_check.config.error_keywords = kwEl.value.split(',').map(s => s.trim()).filter(Boolean);
+            }
+        }
+    },
+
     nextStep() {
+        this.collectCurrentStepValues();
         if (this.currentStep < this.totalSteps) {
             this.currentStep++;
             this.refresh();
@@ -584,6 +623,7 @@ const RegistrationWizard = {
     },
 
     async submit() {
+        this.collectCurrentStepValues();
         try {
             showLoading(true);
 

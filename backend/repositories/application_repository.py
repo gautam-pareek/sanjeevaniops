@@ -60,8 +60,8 @@ class ApplicationRepository:
                 app_id, name, description, container_name, container_id,
                 status, health_check_config, recovery_policy_config, metadata,
                 registered_at, registered_by, last_updated_at, last_updated_by,
-                version, deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                version, deleted_at, monitoring_paused
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             app_id, name, description, container_name, container_id,
             ApplicationStatus.ACTIVE.value,
@@ -69,7 +69,7 @@ class ApplicationRepository:
             json.dumps(recovery_policy_config),
             json.dumps(metadata),
             now, operator, now, operator,
-            1, None
+            1, None, 0
         ))
         
         # Record in history

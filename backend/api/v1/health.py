@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, status, Depends, HTTPException
 from typing import Optional
 import json
 import sqlite3
+from datetime import datetime, timezone
 
 from backend.api.dependencies import get_db_connection, get_current_operator
 from backend.api.v1.models.health_responses import (
@@ -14,6 +15,8 @@ from backend.api.v1.models.health_responses import (
     PaginatedHealthHistory,
     HealthCheckResultResponse,
     ManualCheckResponse,
+    CrashEventResponse,
+    CrashEventsListResponse,
 )
 from backend.repositories.health_repository import HealthRepository
 from backend.repositories.application_repository import ApplicationRepository
@@ -267,3 +270,222 @@ def resume_monitoring(
         "monitoring_paused": False,
         "message": f"Health check monitoring resumed. Checks will run every {interval}s.",
     }
+
+# ============================================================================
+# Crash Events
+# ============================================================================
+
+@router.get(
+    "/{app_id}/crash-events",
+    response_model=CrashEventsListResponse,
+    summary="List crash events",
+    description="Returns captured crash events with Docker logs for an application.",
+)
+def list_crash_events(
+    app_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    conn: sqlite3.Connection = Depends(get_db_connection),
+):
+    app = _app_repo.get_application(conn, app_id)
+    if not app:
+        raise ApplicationNotFoundException(app_id)
+
+    events = _health_repo.list_crash_events(conn, app_id, limit=limit)
+    return CrashEventsListResponse(
+        events=[CrashEventResponse(**e) for e in events],
+        total=len(events),
+    )
+
+
+@router.get(
+    "/{app_id}/crash-events/{event_id}",
+    response_model=CrashEventResponse,
+    summary="Get crash event detail",
+    description="Returns a single crash event including full Docker logs.",
+)
+def get_crash_event(
+    app_id: str,
+    event_id: str,
+    conn: sqlite3.Connection = Depends(get_db_connection),
+):
+    app = _app_repo.get_application(conn, app_id)
+    if not app:
+        raise ApplicationNotFoundException(app_id)
+
+    event = _health_repo.get_crash_event(conn, event_id)
+    if not event or event["app_id"] != app_id:
+        raise HTTPException(status_code=404, detail="Crash event not found")
+
+    return CrashEventResponse(**event)
+
+
+# ============================================================================
+# AI Log Analysis
+# ============================================================================
+
+@router.post(
+    "/{app_id}/crash-events/{event_id}/analyze",
+    summary="Analyze crash event with AI",
+    description="Send crash event logs to local Ollama LLM for root-cause analysis and suggested fixes.",
+)
+def analyze_crash_event(
+    app_id: str,
+    event_id: str,
+    conn: sqlite3.Connection = Depends(get_db_connection),
+):
+    """Analyze a crash event's Docker logs using local Ollama AI."""
+    app = _app_repo.get_application(conn, app_id)
+    if not app:
+        raise ApplicationNotFoundException(app_id)
+
+    event = _health_repo.get_crash_event(conn, event_id)
+    if not event or event["app_id"] != app_id:
+        raise HTTPException(status_code=404, detail="Crash event not found")
+
+    # Import AI service
+    from ai_engine.ai_service import ai_service
+
+    if not ai_service.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama is not running or model is not installed. Run: ollama pull llama3.2:1b",
+        )
+
+    # Extract previous analysis context if re-analyzing
+    previous_summary = None
+    if event.get("ai_analysis"):
+        try:
+            prev = json.loads(event["ai_analysis"]) if isinstance(event["ai_analysis"], str) else event["ai_analysis"]
+            previous_summary = prev.get("crash_reason", "")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # ── Build crash_reason DETERMINISTICALLY from health check sub-checks ──
+    failed_checks = []
+    all_sub_checks = []
+    trigger_error = None
+    trigger_result_id = event.get("triggered_by_result_id")
+
+    if trigger_result_id:
+        trigger_result = _health_repo.get_result(conn, trigger_result_id)
+        if trigger_result:
+            trigger_error = trigger_result.get("error_message")
+            config = trigger_result.get("check_config")
+            if isinstance(config, str):
+                try:
+                    config = json.loads(config)
+                except json.JSONDecodeError:
+                    config = {}
+            if isinstance(config, dict) and "sub_checks" in config:
+                all_sub_checks = config["sub_checks"]
+                failed_checks = [sc for sc in all_sub_checks if not sc.get("passed")]
+
+    # Build factual crash_reason from failed sub-checks (NO AI)
+    if failed_checks:
+        failure_descriptions = [f"{sc.get('name', '?')}: {sc.get('message', 'failed')}" for sc in failed_checks]
+        crash_reason = "Health check failed — " + "; ".join(failure_descriptions)
+    elif trigger_error:
+        crash_reason = f"Health check reported: {trigger_error}"
+    else:
+        crash_reason = "Container became unhealthy (no specific sub-check data available)"
+
+    # Determine severity from sub-check failures (NO AI)
+    severity = "low"
+    category = "unknown"
+    failure_names = [sc.get("name", "").lower() for sc in failed_checks]
+    failure_messages = " ".join(sc.get("message", "").lower() for sc in failed_checks)
+
+    if any("status" in n for n in failure_names) and ("4" in failure_messages or "5" in failure_messages):
+        severity = "high"
+        category = "configuration"
+    if any("keyword" in n or "body" in n for n in failure_names):
+        severity = "medium"
+        category = "application_bug"
+    if any("restart" in n for n in failure_names):
+        severity = "critical"
+        category = "resource"
+    if any("timeout" in n or "time" in n for n in failure_names) and "critical" in failure_messages:
+        severity = "high"
+        category = "resource"
+
+    # ── Use AI ONLY for suggested_fix (the part that benefits from reasoning) ──
+    suggested_fix = "Review the failing health checks and fix the underlying issue."
+    health_context = "\n".join(
+        f"  [{('PASS' if sc.get('passed') else 'FAIL')}] {sc.get('name','?')}: {sc.get('message','')}"
+        for sc in all_sub_checks
+    ) if all_sub_checks else None
+
+    ai_fix = ai_service.get_fix_suggestion(
+        container_name=event.get("container_name", "unknown"),
+        crash_reason=crash_reason,
+        health_context=health_context,
+    )
+    if ai_fix:
+        suggested_fix = ai_fix
+
+    analysis = {
+        "crash_reason": crash_reason,
+        "suggested_fix": suggested_fix,
+        "severity": severity,
+        "category": category,
+        "success": True,
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+        "model_used": ai_service.model,
+    }
+
+    if analysis.get("success"):
+        # Persist to DB
+        _health_repo.update_crash_event_analysis(
+            conn, event_id, json.dumps(analysis)
+        )
+
+    return {
+        "event_id": event_id,
+        "analysis": analysis,
+    }
+
+
+@router.get(
+    "/ai/status",
+    summary="Check AI engine availability",
+    description="Returns whether Ollama is running and the required model is available.",
+)
+def get_ai_status():
+    """Check if the AI analysis engine is available."""
+    from ai_engine.ai_service import ai_service
+
+    available = ai_service.is_available()
+    return {
+        "available": available,
+        "model": ai_service.model,
+        "ollama_url": ai_service.base_url,
+        "message": "AI engine ready" if available else "Ollama not running or model not installed. Run: ollama pull llama3.2:1b",
+    }
+
+
+from pydantic import BaseModel
+
+
+class AIChatRequest(BaseModel):
+    message: str
+    context: Optional[str] = None
+
+
+@router.post(
+    "/ai/chat",
+    summary="Chat with SanjeevaniOps AI Assistant",
+    description="Send a message to the AI assistant. Only answers DevOps/monitoring questions.",
+)
+def ai_chat(body: AIChatRequest):
+    """Chat with the scoped AI assistant."""
+    from ai_engine.ai_service import ai_service
+
+    if not ai_service.is_available():
+        return {
+            "success": False,
+            "response": "AI engine is offline. Make sure Ollama is running and llama3.2:1b model is pulled.",
+        }
+
+    result = ai_service.chat(message=body.message, context=body.context or "")
+    return result
+

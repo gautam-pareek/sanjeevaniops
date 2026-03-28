@@ -48,15 +48,12 @@ class MonitorService:
         Never raises — all exceptions are caught and logged so the scheduler
         job does not die on individual app failures.
         """
+        import traceback
         try:
             self._execute_and_persist(app_id)
         except Exception as e:
-            logger.error(
-                "Unhandled error in health check for app %s: %s",
-                app_id,
-                str(e),
-                exc_info=True,
-            )
+            print(f"[HEALTH CHECK ERROR] app={app_id} error={e}", flush=True)
+            print(traceback.format_exc(), flush=True)
 
     # ------------------------------------------------------------------
     # Internal: check execution and persistence
@@ -74,8 +71,8 @@ class MonitorService:
                 logger.debug("Health check skipped — app %s is inactive", app_id)
                 return
 
-            if app.get("monitoring_paused"):
-                logger.debug("Health check skipped — app %s is paused", app_id)
+            if app.get("monitoring_paused") and app.get("paused_by"):
+                logger.debug("Health check skipped — app %s is paused by %s", app_id, app.get("paused_by"))
                 return
 
             hc_config: Dict[str, Any] = app["health_check_config"]
@@ -97,7 +94,16 @@ class MonitorService:
                     response_time_ms=None,
                     error_message=f"Container is {container_info.get('status', 'not running')} — expected running",
                 )
-                # Persist and update status, then return
+                # Read previous status BEFORE updating
+                current_status_row = self._health_repo.get_status(conn, app_id)
+                prev_status = current_status_row["current_status"] if current_status_row else "unknown"
+                consecutive_failures = (current_status_row["consecutive_failures"] if current_status_row else 0) + 1
+                first_failure_at = (
+                    current_status_row.get("first_failure_at") if current_status_row and current_status_row.get("first_failure_at")
+                    else datetime.now(timezone.utc).isoformat()
+                )
+
+                # Persist result
                 result_id = self._health_repo.insert_result(
                     conn=conn,
                     app_id=app_id,
@@ -106,12 +112,7 @@ class MonitorService:
                     check_config=inner_config,
                     response_time_ms=result.response_time_ms,
                     error_message=result.error_message,
-                )
-                current_status_row = self._health_repo.get_status(conn, app_id)
-                consecutive_failures = (current_status_row["consecutive_failures"] if current_status_row else 0) + 1
-                first_failure_at = (
-                    current_status_row.get("first_failure_at") if current_status_row and current_status_row.get("first_failure_at")
-                    else __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+                    sub_checks=result.sub_checks,
                 )
                 self._health_repo.upsert_status(
                     conn=conn,
@@ -122,6 +123,9 @@ class MonitorService:
                     last_result_id=result_id,
                     first_failure_at=first_failure_at,
                 )
+                # Capture crash event only on first transition to unhealthy
+                if prev_status != "unhealthy":
+                    self._capture_crash_event(conn, app_id, container_name, result_id)
                 logger.warning(
                     "[UNHEALTHY] app=%s container=%s — container is %s, skipping check",
                     app_id, container_name, container_info.get("status"),
@@ -151,6 +155,7 @@ class MonitorService:
                 check_config=inner_config,
                 response_time_ms=result.response_time_ms,
                 error_message=result.error_message,
+                sub_checks=result.sub_checks,
             )
 
             # Load current status to compute streak counters
@@ -201,6 +206,11 @@ class MonitorService:
                 first_failure_at=first_failure_at,
             )
 
+            # Capture crash event if status just flipped to unhealthy
+            previous_status = current_status_row["current_status"] if current_status_row else "unknown"
+            if new_status == "unhealthy" and previous_status != "unhealthy":
+                self._capture_crash_event(conn, app_id, container_name, result_id)
+
             self._log_outcome(app_id, container_name, result, new_status, consecutive_failures)
 
     # ------------------------------------------------------------------
@@ -242,6 +252,50 @@ class MonitorService:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
+
+    def _capture_crash_event(
+        self, conn, app_id: str, container_name: str, result_id: str
+    ) -> None:
+        """Pull Docker logs and store as a crash event."""
+        try:
+            # Avoid duplicate crash events for the same result
+            if self._health_repo.crash_event_exists_for_result(conn, result_id):
+                return
+
+            logs = ""
+            container_status = "unknown"
+            exit_code = None
+
+            if self._docker._available:
+                try:
+                    import docker as docker_sdk
+                    client = docker_sdk.from_env()
+                    container = client.containers.get(container_name)
+                    container_status = container.status
+                    exit_code = container.attrs.get("State", {}).get("ExitCode")
+                    # Get last 100 lines of logs
+                    raw_logs = container.logs(tail=100, timestamps=True)
+                    logs = raw_logs.decode("utf-8", errors="replace") if raw_logs else ""
+                except Exception as docker_err:
+                    logs = f"[Could not retrieve logs: {docker_err}]"
+            else:
+                logs = "[Docker unavailable — logs not captured]"
+
+            event_id = self._health_repo.insert_crash_event(
+                conn=conn,
+                app_id=app_id,
+                container_name=container_name,
+                triggered_by_result_id=result_id,
+                container_logs=logs,
+                container_status=container_status,
+                exit_code=exit_code,
+            )
+            logger.info(
+                "[CRASH EVENT] app=%s container=%s event_id=%s — logs captured (%d chars)",
+                app_id, container_name, event_id, len(logs),
+            )
+        except Exception as e:
+            logger.error("Failed to capture crash event for app %s: %s", app_id, str(e))
 
     def _log_outcome(
         self,

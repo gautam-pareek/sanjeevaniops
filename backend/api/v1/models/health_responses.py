@@ -51,3 +51,21 @@ class ManualCheckResponse(BaseModel):
     app_id: str
     message: str
     triggered: bool
+
+class CrashEventResponse(BaseModel):
+    """A single crash event with captured Docker logs."""
+    event_id: str
+    app_id: str
+    container_name: str
+    triggered_by_result_id: Optional[str]
+    container_logs: Optional[str]
+    container_status: Optional[str]
+    exit_code: Optional[int]
+    captured_at: str
+    ai_analysis: Optional[str]
+    ai_analyzed_at: Optional[str]
+
+
+class CrashEventsListResponse(BaseModel):
+    events: List[CrashEventResponse]
+    total: int

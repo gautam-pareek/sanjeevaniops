@@ -2,51 +2,47 @@
 
 ---
 
-## Architecture Style
-
-- **Modular** — each concern is isolated (API, monitoring, AI, automation)
-- **Local-first** — no cloud, no external services, runs entirely on developer's machine
-- **Human-in-the-loop** — no autonomous actions, all recovery requires approval
-- **Event-driven** — health check failures trigger log collection → AI analysis → notification
-
----
-
 ## High-Level Component Map
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Dashboard                             │
 │              (Vanilla HTML/CSS/JS, no build step)            │
-│   Views: Dashboard | Applications | Detail | Register        │
+│   Views: Dashboard | Applications | App Detail | Register    │
+│          | AI Engine (Operations Center) | Settings          │
+│   Components: HealthHistoryTable, CrashEventsPanel,          │
+│               SubCheckResults, HealthStatusBadge,            │
+│               AI Chat, Batch Analysis                        │
 └────────────────────────┬────────────────────────────────────┘
-                         │ HTTP (fetch API)
+                         │ HTTP fetch API
 ┌────────────────────────▼────────────────────────────────────┐
 │                     FastAPI Backend                          │
 │                  (localhost:8000)                            │
-│  /api/v1/applications  │  /api/v1/applications/{id}/health  │
-└──────┬────────────────────────────────┬─────────────────────┘
-       │                                │
-┌──────▼──────────┐           ┌─────────▼──────────┐
-│  SQLite Database │           │  Monitoring Engine  │
-│  (local file)    │           │  (APScheduler)      │
-│                  │           │                     │
-│  Tables:         │◄──────────│  health_checker.py  │
-│  - applications  │           │  monitor_service.py │
-│  - app_history   │           │  monitor_scheduler  │
-│  - health_results│           └─────────┬──────────┘
-│  - app_health_   │                     │
-│    status        │           ┌─────────▼──────────┐
-│  - crash_events  │           │   Docker SDK        │
-│    (planned)     │           │   (read-only)       │
-└──────────────────┘           │                     │
-                               │  - container status │
-┌─────────────────────────────┐│  - container logs   │
-│  AI Engine (planned)        ││  - restart count    │
-│  Ollama + LLaMA 3.1         │└────────────────────┘
-│  - Log analysis             │
-│  - Root cause explanation   │
-│  - Fix suggestions          │
-│  Local only, no API keys    │
+│  /api/v1/applications    /health    /crash-events            │
+│  /ai/status    /ai/chat    /{event_id}/analyze               │
+└──────┬───────────────────────────────┬───────────────────────┘
+       │                               │
+┌──────▼──────────┐          ┌─────────▼──────────┐
+│  SQLite Database │          │  Monitoring Engine  │
+│                  │          │  (APScheduler)      │
+│  Tables:         │◄─────────│                     │
+│  applications    │          │  monitor_scheduler  │
+│  app_history     │          │  monitor_service    │
+│  health_results  │          │  health_checker     │
+│  app_health_     │          └─────────┬──────────┘
+│    status        │                    │
+│  crash_events    │          ┌─────────▼──────────┐
+└──────────────────┘          │   Docker SDK        │
+                              │   (read-only)       │
+┌─────────────────────────────┤                     │
+│  AI Engine                  │  container status   │
+│  Ollama + LLaMA 3.2 1B     │  container logs     │
+│  - Crash log analysis       │  restart count      │
+│  - Root cause + fix         └────────────────────┘
+│  - Scoped DevOps chat       
+│  - Batch analysis           
+│  - Continue in Chat         
+│  Local only, no API keys    
 └─────────────────────────────┘
 ```
 
@@ -54,122 +50,144 @@
 
 ## Layer Breakdown
 
-### 1. Dashboard (Frontend)
-- Pure vanilla JS — no React, no build step, opens as a file
-- Hash-based routing (`#/`, `#/applications`, `#/applications/:id`)
-- `api.js` — all HTTP calls to backend
-- `app.js` — routing, view rendering, state management (AppState)
-- `components.js` — reusable UI: ApplicationCard, HealthStatusBadge
-- `forms.js` — 4-step registration wizard
-- `styles.css` — CSS variables, dark theme, design system
+### Dashboard
+- Pure vanilla JS — no React, no build step, open as file
+- Hash routing: `#dashboard`, `#applications`, `#register`, `#ai-engine`, `#settings`
+- `api.js` — all HTTP calls, includes crash events, AI chat, AI status methods
+- `app.js` — routing, views, AppState, AI Operations Center view, batch analysis, AI chat handler, Continue-in-Chat auto-send
+- `components.js` — ApplicationCard, HealthHistoryTable, CrashEventsPanel (with re-runnable AI analysis + Continue in Chat), SubCheckResults, HealthCheckDisplay
+- `forms.js` — 4-step registration wizard with enhanced HTTP config, `collectCurrentStepValues()` before step navigation
 
-### 2. FastAPI Backend
-- `main.py` — startup: runs migrations, starts scheduler, mounts routers
-- `applications.py` — CRUD endpoints
-- `health.py` — health check + pause/resume endpoints
-- `dependencies.py` — DB connection injection
-- `models/` — Pydantic request/response models
+### FastAPI Backend
+- `main.py` — startup: runs migrations 001-004, starts scheduler, syncs jobs
+- `applications.py` — CRUD
+- `health.py` — health checks, pause/resume, crash events, AI analysis endpoint (with health check context), AI chat endpoint, AI status endpoint
+- `models/requests.py` — HttpHealthCheckConfig with 6 detection fields
+- `models/health_responses.py` — SubCheckResultResponse, CrashEventResponse
 
-### 3. SQLite Database
+### SQLite Database
 - Single local file: `sanjeevaniops.db`
-- All schema managed via numbered migration files
-- `database.py` runs migrations idempotently on startup
-- `check_same_thread=False` — required for FastAPI thread pool
+- All schema via numbered migration files
+- Idempotent migrations — each statement runs individually
+- `check_same_thread=False` for FastAPI thread pool
 
-### 4. Monitoring Engine
-- `monitor_scheduler.py` — APScheduler, one job per registered app
-  - Respects `status=inactive` and `monitoring_paused=True`
-  - Per-app configurable interval (default 30s)
-- `monitor_service.py` — orchestrates a single check cycle:
-  1. Check if container is running → if not, immediately unhealthy
-  2. Execute health check via `health_checker.py`
-  3. Apply hysteresis (failure/success thresholds)
-  4. Persist result + update current status
-- `health_checker.py` — pure check execution, no side effects:
-  - HTTP: status code, response time, keyword in body
-  - TCP: port connectivity
-  - Exec: command inside container, check exit code
-  - Docker Native: reads Docker's HEALTHCHECK status
-  - Container restart count: detects crash-looping
+### AI Engine
 
-### 5. Docker Service
-- Read-only Docker SDK usage only
-- `docker_service.py` — graceful degradation:
-  - If Docker daemon is unavailable, sets `_available = False`
-  - All methods return None/False gracefully
-  - API stays up and functional
+#### Architecture
+- `ai_engine/ai_service.py` — Ollama HTTP client
+- Model: `llama3.2:1b` (~1.3GB, runs on 4GB RAM laptops)
 
-### 6. AI Engine (Planned — Feature 5)
-- Local Ollama server running LLaMA 3.1
-- Triggered when crash event is recorded
-- Input: container logs + HTTP response + resource stats
-- Output: crash reason + suggested fix (plain English)
-- Stored in DB, displayed in dashboard detail view
-- Zero external API calls
+#### Crash Log Analysis
+- **Health-check-first prompt**: Health check sub-check results (PASS/FAIL with messages) are injected as PRIMARY evidence; container logs are supplementary
+- Structured JSON output: crash_reason, suggested_fix, severity, category
+- **Re-runnable**: Previous analysis context passed on re-analyze
+- **Cross-references**: Triggering health check result + last 5 unhealthy results fed to AI
 
----
+#### Prompt Structure
+```
+Health Check Findings (PRIMARY) → placed first
+  - Triggering check: sub-check [FAIL/PASS] details
+  - Recent unhealthy checks: error messages
+Container Logs (supplementary) → placed second
+Rules → prioritize health check findings over logs
+JSON output format → last
+```
 
-## Health Check Flow
+#### Scoped Chat
+- System prompt restricts responses to DevOps/container topics only
+- Non-related questions get polite refusal
+- **Continue in Chat**: Crash analysis context passed via sessionStorage to AI Engine chat, auto-sent as first message
+
+#### Batch Analysis
+- AI Operations Center can analyze all pending crash events in sequence with progress bar
+
+### Monitoring Engine
 
 ```
-APScheduler fires (every N seconds per app)
-        │
-        ▼
-Is app active AND not paused?
-        │ No → skip
-        │ Yes
-        ▼
-Is container running?
-        │ No → record "unhealthy: container exited", update status, return
-        │ Yes
-        ▼
-Execute health check (HTTP/TCP/Exec/DockerNative)
-        │
-        ▼
-Record result in health_check_results
-        │
-        ▼
-Apply hysteresis:
-  - If unhealthy: consecutive_failures++
-    If consecutive_failures >= failure_threshold → set status = unhealthy
-  - If healthy: consecutive_successes++
-    If consecutive_successes >= success_threshold → set status = healthy
-        │
-        ▼
-Update app_health_status
-        │
-        ▼ (Feature 4 — planned)
-If status just flipped to unhealthy:
-  Pull Docker logs → store as crash_event
-        │
-        ▼ (Feature 5 — planned)
-Send logs to Ollama → store AI analysis
+Registration
+    │
+    └─► scheduler.add_app(app_id, interval)   ← called immediately on registration
+            │
+            ▼
+    APScheduler job fires every N seconds
+            │
+            ▼
+    monitor_service.run_check_for_app(app_id)
+            │
+            ├─► Is app active AND not paused (with paused_by set)?
+            │       No → skip
+            │
+            ├─► Read prev_status from DB  ← BEFORE any writes
+            │
+            ├─► Is container running?
+            │       No → immediately unhealthy, capture crash event if transition
+            │
+            ├─► health_checker.run_check(type, config, container)
+            │       HTTP: status + response time + keywords + restart count
+            │             + additional endpoints (each scans body too)
+            │             + JSON validation
+            │       TCP: port connectivity
+            │       Exec: command exit code
+            │       Docker Native: HEALTHCHECK status
+            │
+            ├─► insert_result (with sub_checks serialized into check_config)
+            │       sub_checks=result.sub_checks passed at both call sites
+            │
+            ├─► Apply hysteresis (failure/success thresholds)
+            │
+            ├─► upsert_status
+            │
+            └─► If status just flipped healthy→unhealthy:
+                    _capture_crash_event()
+                        │
+                        ├─► Pull last 100 lines of Docker logs
+                        ├─► Get container status + exit code
+                        └─► insert_crash_event()
 ```
+
+### Health Checker — 6 Sub-Checks (HTTP)
+
+| Check | What It Catches |
+|-------|----------------|
+| HTTP Status Code | Site completely down (4xx/5xx) |
+| Response Time | Slow server (>3s warn, >5s critical configurable) |
+| Body Keywords | Error pages showing as 200 (searches for "error", "exception" etc) |
+| Restart Count | Crash-looping container (count increased since last check) |
+| Additional Endpoints | Specific routes broken — each also scans body for errors |
+| JSON Validation | Backend API returning non-JSON when JSON expected |
+
+### Crash Event Capture
+
+- Triggered only on first `healthy → unhealthy` transition
+- `prev_status` read before `upsert_status` — critical ordering
+- Pulls last 100 lines of Docker logs with timestamps
+- Stores: logs, container_status, exit_code, captured_at
+- AI analysis stored in `ai_analysis` JSON field, re-runnable with health check context
+- `crash_event_exists_for_result()` prevents duplicates
 
 ---
 
 ## Data Model (Key Tables)
 
 ### applications
-- `app_id` (UUID), `name`, `container_name`, `status` (active/inactive)
-- `health_check_config` (JSON), `recovery_policy` (JSON)
-- `monitoring_paused`, `paused_at`, `paused_by`, `pause_reason`
+- `app_id`, `name`, `container_name`, `status`
+- `health_check_config` (JSON), `recovery_policy_config` (JSON), `metadata` (JSON)
+- `monitoring_paused` (DEFAULT 0), `paused_by`, `pause_reason`
 - `version` (optimistic locking), `deleted_at` (soft delete)
 
 ### health_check_results
 - `result_id`, `app_id`, `status`, `check_type`
-- `response_time_ms`, `error_message`, `check_config` (JSON)
-- `checked_at`
+- `check_config` (JSON — includes `sub_checks` array when HTTP)
+- `response_time_ms`, `error_message`, `checked_at`
 
 ### app_health_status
 - `app_id`, `current_status`, `consecutive_failures`, `consecutive_successes`
 - `last_result_id`, `first_failure_at`, `last_checked_at`
 
-### crash_events (planned — migration 004)
+### crash_events
 - `event_id`, `app_id`, `triggered_by_result_id`
-- `container_logs` (text), `captured_at`
-- `ai_analysis` (JSON: reason + fix suggestion)
-- `ai_analyzed_at`
+- `container_name`, `container_logs`, `container_status`, `exit_code`
+- `captured_at`, `ai_analysis` (JSON), `ai_analyzed_at`
 
 ---
 
@@ -177,19 +195,21 @@ Send logs to Ollama → store AI analysis
 
 | AI CAN | AI CANNOT |
 |--------|-----------|
-| Analyze logs | Execute any command |
-| Explain crash cause | Modify code autonomously |
+| Analyze crash logs + health checks | Execute any command |
+| Explain crash cause from evidence | Modify code autonomously |
 | Suggest fix steps | Restart containers automatically |
 | Rate severity | Access external APIs |
-| Summarize patterns | Make decisions without human |
+| Chat about DevOps topics | Answer non-DevOps questions |
+| Batch-analyze events | Make decisions without human |
+| Cross-reference health sub-checks | Hallucinate errors not in evidence |
 
 ---
 
 ## Security Model
 
-- All Docker operations are **read-only** (inspect, logs, stats)
-- No Docker exec unless explicitly configured by user
-- No network calls outside localhost
-- No file system access outside project directory
-- SQLite file is local — no network database
-- No authentication required (single-user local tool)
+- All Docker operations read-only (inspect, logs, stats)
+- No network calls outside localhost (Ollama is local)
+- SQLite file is local
+- No authentication (single-user local tool)
+- AI chat is topic-scoped — refuses non-DevOps queries
+- monitoring_paused only respected when paused_by is also set

@@ -164,6 +164,9 @@ async function navigateTo(route, updateHash = true) {
             case 'settings':
                 renderSettingsView();
                 break;
+            case 'ai-engine':
+                await renderAIEngineView();
+                break;
             default:
                 render404();
         }
@@ -388,10 +391,11 @@ async function renderApplicationDetailView(appId) {
         showLoading(true);
 
         // Fetch app data and health status in parallel
-        const [app, healthStatus, healthHistory] = await Promise.all([
+        const [app, healthStatus, healthHistory, crashEvents] = await Promise.all([
             API.applications.get(appId),
             API.health.getStatus(appId).catch(() => null),
-            API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] }))
+            API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] })),
+            API.health.getCrashEvents(appId).catch(() => ({ events: [] }))
         ]);
         AppState.currentApp = app;
 
@@ -548,6 +552,8 @@ async function renderApplicationDetailView(appId) {
                     ${Components.HealthHistoryTable.render(healthHistory.results)}
                 </div>
             </div>
+
+            ${Components.CrashEventsPanel.render(crashEvents.events, app.app_id)}
 
             <div style="margin-top: var(--space-xl);">
                 <button class="btn btn-primary" onclick="handleViewHistory('${app.app_id}')">
@@ -946,4 +952,432 @@ function showToast(message, type = 'info', duration = 3000) {
     }, duration);
 }
 
+// ============================================================================
+// AI Engine View — Operations Center
+// ============================================================================
+
+async function renderAIEngineView() {
+    updatePageHeader('AI Engine', 'Intelligent log analysis powered by local LLM');
+
+    const contentView = document.getElementById('content-view');
+    contentView.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><p>Initializing AI Engine...</p></div>';
+
+    // Fetch AI status and all crash events
+    let aiStatus = { available: false, model: 'llama3.2:1b', message: 'Checking...' };
+    let allApps = [];
+    let allCrashEvents = [];
+
+    try {
+        [aiStatus, allApps] = await Promise.all([
+            API.health.getAIStatus().catch(() => ({ available: false, model: 'llama3.2:1b', message: 'Cannot reach AI engine' })),
+            API.applications.list({ status: 'active' }).then(r => r.applications || []).catch(() => [])
+        ]);
+
+        // Gather crash events from all apps
+        const crashPromises = allApps.map(app =>
+            API.health.getCrashEvents(app.app_id).then(r => 
+                (r.events || []).map(e => ({ ...e, app_name: app.name }))
+            ).catch(() => [])
+        );
+        const crashArrays = await Promise.all(crashPromises);
+        allCrashEvents = crashArrays.flat().sort((a, b) => new Date(b.captured_at) - new Date(a.captured_at));
+    } catch (e) {
+        console.error('AI Engine init error:', e);
+    }
+
+    // Compute stats
+    const analyzed = allCrashEvents.filter(e => e.ai_analysis);
+    const unanalyzed = allCrashEvents.filter(e => !e.ai_analysis);
+    const severityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+    const categoryCounts = {};
+
+    analyzed.forEach(e => {
+        try {
+            const a = typeof e.ai_analysis === 'string' ? JSON.parse(e.ai_analysis) : e.ai_analysis;
+            if (a.severity && severityCounts.hasOwnProperty(a.severity)) severityCounts[a.severity]++;
+            if (a.category) categoryCounts[a.category] = (categoryCounts[a.category] || 0) + 1;
+        } catch {}
+    });
+
+    const statusColor = aiStatus.available ? 'var(--color-success)' : 'var(--color-error)';
+    const statusText = aiStatus.available ? 'Online' : 'Offline';
+    const statusPulse = aiStatus.available ? 'animation: pulse 2s infinite;' : '';
+
+    contentView.innerHTML = `
+        <!-- AI Engine Hero Banner -->
+        <div style="background: var(--color-primary); border-radius: var(--radius-lg); padding: var(--space-lg); margin-bottom: var(--space-xl); color: white; position: relative;">
+            <div style="position: relative; z-index: 1;">
+                <div style="display: flex; align-items: flex-start; gap: var(--space-md); flex-wrap: wrap;">
+                    <div style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i class="ph ph-brain" style="font-size: 24px; color: #fbbf24;"></i>
+                    </div>
+                    <div style="flex: 1; min-width: 200px;">
+                        <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: white;">AI Operations Center</h2>
+                        <p style="margin: 2px 0 0 0; opacity: 1; font-size: var(--font-size-sm); line-height: 1.4;">Automated Log Analysis & Root-Cause Diagnosis</p>
+                    </div>
+                </div>
+                <div style="display: flex; gap: var(--space-md); flex-wrap: wrap; align-items: center; margin-top: var(--space-md);">
+                    <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
+                        <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
+                        <span style="font-size: 11px; font-weight: 600;">Engine: ${statusText}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
+                        <i class="ph ph-cpu" style="font-size: 14px;"></i>
+                        <span style="font-size: 11px; font-weight: 600;">Model: ${aiStatus.model || 'llama3.2:1b'}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
+                        <i class="ph ph-hard-drives" style="font-size: 14px;"></i>
+                        <span style="font-size: 11px; font-weight: 600;">Local Mode</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Cards Row -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-lg); margin-bottom: var(--space-xl);">
+            <div class="card" style="text-align: center; padding: var(--space-lg);">
+                <div style="font-size: 36px; font-weight: 700; color: var(--color-primary);">${allCrashEvents.length}</div>
+                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--space-xs);">Total Crash Events</div>
+            </div>
+            <div class="card" style="text-align: center; padding: var(--space-lg);">
+                <div style="font-size: 36px; font-weight: 700; color: var(--color-success);">${analyzed.length}</div>
+                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--space-xs);">AI Analyses Complete</div>
+            </div>
+            <div class="card" style="text-align: center; padding: var(--space-lg);">
+                <div style="font-size: 36px; font-weight: 700; color: var(--color-warning);">${unanalyzed.length}</div>
+                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--space-xs);">Pending Analysis</div>
+            </div>
+            <div class="card" style="text-align: center; padding: var(--space-lg);">
+                <div style="font-size: 36px; font-weight: 700; color: var(--color-error);">${severityCounts.critical + severityCounts.high}</div>
+                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--space-xs);">Critical/High Severity</div>
+            </div>
+        </div>
+
+        <!-- Two Column: Severity Distribution + Category Breakdown -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); margin-bottom: var(--space-xl);">
+            <!-- Severity Distribution -->
+            <div class="card">
+                <div class="card-header"><h4 class="card-title"><i class="ph ph-chart-bar"></i> Severity Distribution</h4></div>
+                <div class="card-body">
+                    ${_renderSeverityBars(severityCounts, analyzed.length)}
+                </div>
+            </div>
+
+            <!-- Category Breakdown -->
+            <div class="card">
+                <div class="card-header"><h4 class="card-title"><i class="ph ph-tag"></i> Failure Categories</h4></div>
+                <div class="card-body">
+                    ${Object.keys(categoryCounts).length > 0 ? Object.entries(categoryCounts).map(([cat, count]) => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--color-border);">
+                            <span style="font-size: var(--font-size-sm); text-transform: capitalize;">${cat.replace(/_/g, ' ')}</span>
+                            <span class="badge" style="background: var(--color-primary); color: white;">${count}</span>
+                        </div>
+                    `).join('') : '<p style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">No analyses yet — run analysis on crash events to see categories</p>'}
+                </div>
+            </div>
+        </div>
+
+        <!-- Batch Analysis Action -->
+        ${unanalyzed.length > 0 && aiStatus.available ? `
+        <div class="card" style="margin-bottom: var(--space-xl); border: 1px solid var(--color-primary);">
+            <div class="card-body" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h4 style="margin: 0;"><i class="ph ph-lightning"></i> Batch Analysis Available</h4>
+                    <p style="margin: 4px 0 0 0; font-size: var(--font-size-sm); color: var(--color-text-secondary);">${unanalyzed.length} crash event(s) awaiting AI analysis</p>
+                </div>
+                <button class="btn btn-primary" id="batch-analyze-btn" onclick="runBatchAnalysis()">
+                    <i class="ph ph-brain"></i> Analyze All (${unanalyzed.length})
+                </button>
+            </div>
+            <div id="batch-progress" style="display: none; padding: 0 var(--space-lg) var(--space-lg);">
+                <div style="height: 6px; background: var(--color-surface-elevated); border-radius: var(--radius-full); overflow: hidden;">
+                    <div id="batch-progress-bar" style="height: 100%; width: 0%; background: var(--color-primary); transition: width 0.5s ease; border-radius: var(--radius-full);"></div>
+                </div>
+                <p id="batch-status-text" style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-top: var(--space-xs);">Starting...</p>
+            </div>
+        </div>
+        ` : ''}
+
+        <!-- Recent Analyses Timeline -->
+        <div class="card">
+            <div class="card-header">
+                <h4 class="card-title"><i class="ph ph-clock-counter-clockwise"></i> Recent AI Analyses</h4>
+            </div>
+            <div class="card-body">
+                ${analyzed.length > 0 ? analyzed.slice(0, 10).map(e => _renderAnalysisTimelineItem(e)).join('') : `
+                    <div class="empty-state" style="padding: var(--space-xl);">
+                        <div style="font-size: 48px; color: var(--color-text-tertiary); margin-bottom: var(--space-md);"><i class="ph ph-brain"></i></div>
+                        <h4 style="color: var(--color-text-secondary);">No Analyses Yet</h4>
+                        <p style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">Navigate to an application's crash events and click "Analyze with AI" to get started</p>
+                    </div>
+                `}
+            </div>
+        </div>
+
+        <!-- AI Chat Assistant -->
+        <div class="card" style="margin-top: var(--space-xl); padding: 0; overflow: hidden;">
+            <div class="card-header" style="background: var(--color-primary); color: white; border-radius: 0; margin-bottom: 0; padding: var(--space-md) var(--space-lg); border: none;">
+                <h4 class="card-title" style="color: white; margin: 0; display: flex; align-items: center; gap: 10px;"><i class="ph ph-chat-dots"></i> AI Assistant</h4>
+                <span style="font-size: var(--font-size-xs); opacity: 1; font-weight: 600;">SanjeevaniOps Bot</span>
+            </div>
+            <div id="ai-chat-messages" style="height: 350px; overflow-y: auto; padding: var(--space-lg); background: var(--color-background); border: none;">
+                <div style="display: flex; gap: var(--space-md); margin-bottom: var(--space-lg);">
+                    <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--color-primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i class="ph ph-brain" style="color: white; font-size: 18px;"></i>
+                    </div>
+                    <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md); padding: var(--space-md); max-width: 85%; box-shadow: var(--shadow-sm);">
+                        <p style="margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary);">
+                            Hello! I'm the <strong>SanjeevaniOps AI Assistant</strong>. I can help with:
+                        </p>
+                        <ul style="margin: 8px 0 0 0; padding-left: 16px; font-size: var(--font-size-sm); color: var(--color-text-tertiary);">
+                            <li>Diagnosing container crashes & exit codes</li>
+                            <li>Docker & Nginx troubleshooting</li>
+                            <li>Health check configuration help</li>
+                            <li>Interpreting crash event logs</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div style="display: flex; gap: var(--space-sm); padding: var(--space-md); border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--color-surface);">
+                <input
+                    type="text"
+                    id="ai-chat-input"
+                    class="form-input"
+                    placeholder="Ask about container issues, crash logs, Docker troubleshooting..."
+                    style="flex: 1;"
+                    onkeydown="if(event.key==='Enter') sendAIChat()"
+                >
+                <button class="btn btn-primary" id="ai-chat-send-btn" onclick="sendAIChat()">
+                    <i class="ph ph-paper-plane-tilt"></i> Send
+                </button>
+            </div>
+        </div>
+
+        <style>
+            .typing-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-tertiary); margin: 0 2px; }
+            .typing-dot:nth-child(1) { animation: none; opacity: 0.6; }
+            .typing-dot:nth-child(2) { animation: none; opacity: 0.8; }
+            .typing-dot:nth-child(3) { animation: none; opacity: 1; }
+        </style>
+    `;
+
+    // Check if we have crash context from "Continue in Chat" button
+    const _checkChatContext = () => {
+        const stored = sessionStorage.getItem('aiChatContext');
+        if (!stored) return;
+
+        const input = document.getElementById('ai-chat-input');
+        const messages = document.getElementById('ai-chat-messages');
+        if (!input || !messages) {
+            // DOM not ready yet, retry
+            setTimeout(_checkChatContext, 200);
+            return;
+        }
+
+        sessionStorage.removeItem('aiChatContext');
+        try {
+            const ctx = JSON.parse(stored);
+            // Add crash context as a system message in the chat
+            const contextDiv = document.createElement('div');
+            contextDiv.style.cssText = 'padding: 10px 14px; background: var(--color-primary-light, #fff3e0); border-left: 3px solid var(--color-primary); border-radius: 6px; margin-bottom: 12px; font-size: 13px;';
+            contextDiv.innerHTML = `<strong style="display:block; margin-bottom:4px;"><i class="ph ph-brain"></i> Crash Analysis Context</strong>`
+                + `<div style="color: var(--color-text-secondary); margin-bottom:4px;"><strong>Issue:</strong> ${ctx.crashReason}</div>`
+                + `<div style="color: var(--color-text-secondary);"><strong>Suggested Fix:</strong> ${ctx.suggestedFix}</div>`;
+            messages.appendChild(contextDiv);
+            messages.scrollTop = messages.scrollHeight;
+
+            // Pre-fill a question
+            input.value = 'Can you explain this issue in more detail and give step-by-step debugging instructions?';
+            input.focus();
+
+            // Scroll chat into view
+            const chatCard = input.closest('.card');
+            if (chatCard) chatCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (e) {
+            console.error('Failed to parse AI chat context:', e);
+        }
+    };
+    setTimeout(_checkChatContext, 600);
+}
+
+function _renderSeverityBars(counts, total) {
+    if (total === 0) return '<p style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">No analyses yet — severity data will appear after running analyses</p>';
+    
+    const items = [
+        { label: 'Critical', count: counts.critical, color: 'var(--color-error)' },
+        { label: 'High', count: counts.high, color: '#e67e22' },
+        { label: 'Medium', count: counts.medium, color: 'var(--color-warning)' },
+        { label: 'Low', count: counts.low, color: 'var(--color-success)' },
+    ];
+
+    return items.map(item => {
+        const pct = total > 0 ? (item.count / total * 100) : 0;
+        return `
+            <div style="display: flex; align-items: center; gap: var(--space-md); margin-bottom: var(--space-sm);">
+                <span style="width: 60px; font-size: var(--font-size-sm); font-weight: 500;">${item.label}</span>
+                <div style="flex: 1; height: 22px; background: var(--color-surface-elevated); border-radius: var(--radius-sm); overflow: hidden;">
+                    <div style="height: 100%; width: ${pct}%; background: ${item.color}; border-radius: var(--radius-sm); transition: width 1s ease; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; font-size: 11px; color: white; font-weight: 600; min-width: ${item.count > 0 ? '24px' : '0'};">
+                        ${item.count > 0 ? item.count : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function _renderAnalysisTimelineItem(e) {
+    let analysis = {};
+    try {
+        analysis = typeof e.ai_analysis === 'string' ? JSON.parse(e.ai_analysis) : e.ai_analysis;
+    } catch {}
+
+    const severityColors = { critical: 'var(--color-error)', high: '#e67e22', medium: 'var(--color-warning)', low: 'var(--color-success)' };
+    const sevColor = severityColors[analysis.severity] || 'var(--color-text-tertiary)';
+
+    return `
+        <div style="display: flex; gap: var(--space-md); padding: var(--space-md) 0; border-bottom: 1px solid var(--color-border);">
+            <div style="width: 4px; border-radius: 2px; background: ${sevColor}; flex-shrink: 0;"></div>
+            <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <div style="display: flex; align-items: center; gap: var(--space-sm);">
+                        <strong style="font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(e.app_name || 'Unknown App')}</strong>
+                        <span class="badge" style="background: ${sevColor}; color: white; font-size: 10px; padding: 1px 6px;">${(analysis.severity || '?').toUpperCase()}</span>
+                        ${analysis.category ? `<span style="font-size: 10px; color: var(--color-text-tertiary); text-transform: capitalize;">${analysis.category.replace(/_/g, ' ')}</span>` : ''}
+                    </div>
+                    <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary);">${Utils.date.formatDateTime(e.ai_analyzed_at || e.captured_at)}</span>
+                </div>
+                <p style="font-size: var(--font-size-sm); color: var(--color-text-secondary); margin: 0; line-height: 1.4;">${Utils.dom.escapeHTML(analysis.crash_reason || 'Analysis in progress...')}</p>
+            </div>
+        </div>
+    `;
+}
+
+// Batch analysis function
+async function runBatchAnalysis() {
+    const btn = document.getElementById('batch-analyze-btn');
+    const progressDiv = document.getElementById('batch-progress');
+    const progressBar = document.getElementById('batch-progress-bar');
+    const statusText = document.getElementById('batch-status-text');
+
+    if (btn) btn.disabled = true;
+    if (progressDiv) progressDiv.style.display = 'block';
+
+    try {
+        // Get all apps and their unanalyzed crash events
+        const apps = await API.applications.list({ status: 'active' }).then(r => r.applications || []);
+        let allUnanalyzed = [];
+
+        for (const app of apps) {
+            const events = await API.health.getCrashEvents(app.app_id).then(r => r.events || []).catch(() => []);
+            const pending = events.filter(e => !e.ai_analysis);
+            pending.forEach(e => allUnanalyzed.push({ appId: app.app_id, eventId: e.event_id, appName: app.name }));
+        }
+
+        for (let i = 0; i < allUnanalyzed.length; i++) {
+            const item = allUnanalyzed[i];
+            const pct = ((i + 1) / allUnanalyzed.length * 100).toFixed(0);
+            if (statusText) statusText.textContent = `Analyzing ${item.appName} (${i + 1} / ${allUnanalyzed.length})...`;
+            if (progressBar) progressBar.style.width = pct + '%';
+
+            try {
+                await API.health.analyzeCrashEvent(item.appId, item.eventId);
+            } catch (err) {
+                console.warn('Batch analysis failed for', item.eventId, err);
+            }
+        }
+
+        if (statusText) statusText.textContent = `Complete! Analyzed ${allUnanalyzed.length} event(s).`;
+        if (progressBar) progressBar.style.width = '100%';
+
+        // Refresh the view after a short delay
+        setTimeout(() => renderAIEngineView(), 2000);
+
+    } catch (err) {
+        if (statusText) statusText.textContent = `Error: ${err.message}`;
+        if (btn) btn.disabled = false;
+    }
+}
+
+// AI Chat function
+async function sendAIChat() {
+    const input = document.getElementById('ai-chat-input');
+    const messages = document.getElementById('ai-chat-messages');
+    const sendBtn = document.getElementById('ai-chat-send-btn');
+    if (!input || !messages) return;
+
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    // Render user message
+    messages.innerHTML += `
+        <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md); justify-content: flex-end;">
+            <div style="background: var(--color-primary); color: white; border-radius: var(--radius-md) 0 var(--radius-md) var(--radius-md); padding: var(--space-sm) var(--space-md); max-width: 80%;">
+                <p style="margin: 0; font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(msg)}</p>
+            </div>
+            <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--color-primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i class="ph ph-user" style="color: white; font-size: 16px;"></i>
+            </div>
+        </div>
+    `;
+
+    input.value = '';
+    input.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+
+    // Show typing indicator
+    const typingId = 'typing-' + Date.now();
+    messages.innerHTML += `
+        <div id="${typingId}" style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);">
+            <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--color-primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i class="ph ph-brain" style="color: white; font-size: 16px;"></i>
+            </div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md); padding: var(--space-sm) var(--space-md); display: flex; align-items: center;">
+                <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+            </div>
+        </div>
+    `;
+    messages.scrollTop = messages.scrollHeight;
+
+    try {
+        const resp = await API.health.aiChat(msg);
+        // Remove typing indicator
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.remove();
+
+        const reply = resp.response || 'No response.';
+        const isError = resp.success === false;
+
+        messages.innerHTML += `
+            <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--color-primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                    <i class="ph ph-brain" style="color: white; font-size: 16px;"></i>
+                </div>
+                <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md); padding: var(--space-md); max-width: 85%; ${isError ? 'border-left: 4px solid var(--color-error);' : ''}">
+                    <p style="margin: 0; font-size: var(--font-size-sm); color: var(--color-text-primary); white-space: pre-wrap; line-height: 1.5;">${Utils.dom.escapeHTML(reply)}</p>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.remove();
+
+        messages.innerHTML += `
+            <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--color-error); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                    <i class="ph ph-warning" style="color: white; font-size: 16px;"></i>
+                </div>
+                <div style="background: var(--color-surface); border: 1px solid var(--color-error); border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md); padding: var(--space-md); max-width: 85%;">
+                    <p style="margin: 0; font-size: var(--font-size-sm); color: var(--color-error); font-weight: 500;">${Utils.dom.escapeHTML(err.message || 'Connection failed')}</p>
+                </div>
+            </div>
+        `;
+    }
+
+    messages.scrollTop = messages.scrollHeight;
+    input.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+    input.focus();
+}
+
 console.log('App.js loaded successfully');
+

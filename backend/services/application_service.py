@@ -102,6 +102,16 @@ class ApplicationService:
         
         # Retrieve and return created application
         app_data = self.app_repo.get_application(conn, app_id)
+
+        # Register with scheduler so monitoring starts immediately
+        try:
+            from monitoring.monitor_scheduler import scheduler
+            interval = request.health_check.model_dump().get("interval_seconds", 30)
+            scheduler.add_app(app_id, interval)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Could not add app to scheduler: %s", e)
+
         return self._build_application_response(app_data, container_info)
     
     def get_application(

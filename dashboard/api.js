@@ -212,6 +212,31 @@ const HealthAPI = {
     */
    async getSummary() {
       return await apiFetch(`/applications/monitoring/summary`);
+   },
+
+   async getCrashEvents(appId, limit = 20) {
+      return await apiFetch(`/applications/${appId}/crash-events?limit=${limit}`);
+   },
+
+   async getCrashEvent(appId, eventId) {
+      return await apiFetch(`/applications/${appId}/crash-events/${eventId}`);
+   },
+
+   async analyzeCrashEvent(appId, eventId) {
+      return await apiFetch(`/applications/${appId}/crash-events/${eventId}/analyze`, {
+         method: 'POST'
+      });
+   },
+
+   async getAIStatus() {
+      return await apiFetch('/applications/ai/status');
+   },
+
+   async aiChat(message, context = null) {
+      return await apiFetch('/applications/ai/chat', {
+         method: 'POST',
+         body: { message, context }
+      });
    }
 };
 

@@ -216,3 +216,70 @@ class HealthRepository:
 
     def _row_to_status(self, row: sqlite3.Row) -> Dict[str, Any]:
         return dict(row)
+    # ------------------------------------------------------------------
+    # Crash Events
+    # ------------------------------------------------------------------
+
+    def insert_crash_event(
+        self,
+        conn,
+        app_id: str,
+        container_name: str,
+        triggered_by_result_id: str,
+        container_logs: str,
+        container_status: str,
+        exit_code=None,
+    ) -> str:
+        import uuid
+        from datetime import datetime, timezone
+        event_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO crash_events
+                (event_id, app_id, triggered_by_result_id, container_name,
+                 container_logs, container_status, exit_code, captured_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, app_id, triggered_by_result_id, container_name,
+             container_logs, container_status, exit_code, now),
+        )
+        return event_id
+
+    def list_crash_events(
+        self, conn, app_id: str, limit: int = 20
+    ) -> list:
+        rows = conn.execute(
+            """
+            SELECT * FROM crash_events
+            WHERE app_id = ?
+            ORDER BY captured_at DESC
+            LIMIT ?
+            """,
+            (app_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_crash_event(self, conn, event_id: str):
+        row = conn.execute(
+            "SELECT * FROM crash_events WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_crash_event_analysis(
+        self, conn, event_id: str, ai_analysis: str
+    ) -> None:
+        """Store AI analysis result on a crash event."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE crash_events SET ai_analysis = ?, ai_analyzed_at = ? WHERE event_id = ?",
+            (ai_analysis, now, event_id),
+        )
+
+    def crash_event_exists_for_result(self, conn, result_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM crash_events WHERE triggered_by_result_id = ?",
+            (result_id,)
+        ).fetchone()
+        return row is not None

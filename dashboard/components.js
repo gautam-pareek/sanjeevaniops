@@ -242,6 +242,8 @@ const HealthCheckDisplay = {
 
         switch (type) {
             case 'http':
+                const endpoints = config.additional_endpoints || [];
+                const keywords = config.error_keywords || [];
                 return `
                     <div style="margin-top: var(--space-lg); padding-top: var(--space-lg); border-top: 1px solid var(--color-border);">
                         <h5 style="margin-bottom: var(--space-md);">HTTP Configuration</h5>
@@ -249,7 +251,26 @@ const HealthCheckDisplay = {
                             <div><strong>URL:</strong> <code>${config.url}</code></div>
                             <div><strong>Method:</strong> ${config.method || 'GET'}</div>
                             <div><strong>Expected Status:</strong> ${(config.expected_status_codes || [200]).join(', ')}</div>
+                            <div><strong>Warn Response Time:</strong> ${config.warn_response_time_ms || 3000}ms</div>
+                            <div><strong>Critical Response Time:</strong> ${config.critical_response_time_ms || 5000}ms</div>
+                            <div><strong>Expect JSON:</strong> ${config.expect_json ? '<span style="color:var(--color-success);">Yes</span>' : 'No'}</div>
                         </div>
+                        ${endpoints.length > 0 ? `
+                            <div style="margin-top: var(--space-md);">
+                                <strong>Additional Endpoints:</strong>
+                                <div style="display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-xs);">
+                                    ${endpoints.map(ep => `<code style="padding: 2px 8px; background: var(--color-surface-elevated); border-radius: var(--radius-sm); font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(ep)}</code>`).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${keywords.length > 0 ? `
+                            <div style="margin-top: var(--space-md);">
+                                <strong>Error Keywords:</strong>
+                                <div style="display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-xs);">
+                                    ${keywords.map(kw => `<span class="badge badge-error" style="font-size: var(--font-size-xs);">${Utils.dom.escapeHTML(kw)}</span>`).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
                     </div>
                 `;
             case 'tcp':
@@ -575,3 +596,152 @@ Components.HealthStatusBadge = HealthStatusBadge;
 Components.HealthHistoryTable = HealthHistoryTable;
 
 console.log('Health components loaded');
+
+const CrashEventsPanel = {
+    render(events, appId) {
+        if (!events || events.length === 0) return '';
+        return `
+        <div class="card" style="margin-top: var(--space-xl);">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <h4 class="card-title" style="color: var(--color-error);">
+                    <i class="ph ph-warning-octagon"></i> Crash Events
+                </h4>
+                <span style="font-size: var(--font-size-sm); color: var(--color-text-tertiary);">${events.length} event(s) captured</span>
+            </div>
+            <div class="card-body">
+                ${events.map(e => CrashEventsPanel._renderEvent(e, appId)).join('')}
+            </div>
+        </div>`;
+    },
+
+    _renderEvent(e, appId) {
+        const logPreview = e.container_logs
+            ? Utils.dom.escapeHTML(e.container_logs.slice(-2000))
+            : null;
+
+        // Parse existing AI analysis if available
+        let aiHtml = '';
+        if (e.ai_analysis) {
+            try {
+                const analysis = typeof e.ai_analysis === 'string' ? JSON.parse(e.ai_analysis) : e.ai_analysis;
+                aiHtml = CrashEventsPanel._renderAIInsight(analysis, e.ai_analyzed_at);
+            } catch {
+                aiHtml = `<div style="margin-top: var(--space-sm); padding: var(--space-sm); background: var(--color-surface-elevated); border-radius: var(--radius-sm); font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(String(e.ai_analysis))}</div>`;
+            }
+        }
+
+        const analyzeBtnLabel = e.ai_analysis ? 'Re-Analyze' : 'Analyze with AI';
+        const analyzeBtn = `<button
+                class="btn btn-secondary"
+                id="ai-btn-${e.event_id}"
+                style="font-size: var(--font-size-xs); padding: 4px 12px;"
+                onclick="CrashEventsPanel.analyzeEvent('${appId}', '${e.event_id}')">
+                <i class="ph ph-brain"></i> ${analyzeBtnLabel}
+              </button>`;
+
+        return `
+        <div style="border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: var(--space-md); margin-bottom: var(--space-md);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-sm);">
+                <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-error);">
+                    <i class="ph ph-warning"></i>
+                    Container: ${Utils.dom.escapeHTML(e.container_status || 'unknown')}
+                    ${e.exit_code != null ? `&nbsp;·&nbsp; exit code: <code>${e.exit_code}</code>` : ''}
+                </span>
+                <div style="display:flex; align-items:center; gap: var(--space-sm);">
+                    ${analyzeBtn}
+                    <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
+                        ${Utils.date.formatDateTime(e.captured_at)}
+                    </span>
+                </div>
+            </div>
+            ${logPreview
+                ? `<pre style="font-size: 11px; font-family: var(--font-family-mono); background: var(--color-bg-secondary); border: 1px solid var(--color-border); padding: var(--space-sm); border-radius: var(--border-radius-sm); overflow-x: auto; max-height: 220px; overflow-y: auto; white-space: pre-wrap; color: var(--color-text-secondary); margin: 0;">${logPreview}</pre>`
+                : `<p style="font-size: var(--font-size-sm); color: var(--color-text-tertiary); margin: 0;">No logs captured</p>`
+            }
+            <div id="ai-result-${e.event_id}">${aiHtml}</div>
+        </div>`;
+    },
+
+    _renderAIInsight(analysis, analyzedAt) {
+        const severityColors = {
+            low: 'var(--color-success)',
+            medium: 'var(--color-warning)',
+            high: '#e67e22',
+            critical: 'var(--color-error)',
+        };
+        const sevColor = severityColors[analysis.severity] || 'var(--color-text-secondary)';
+
+        return `
+        <div style="margin-top: var(--space-md); border: 1px solid var(--color-primary); border-radius: var(--radius-md); overflow: hidden;">
+            <div style="background: var(--color-primary); color: white; padding: 6px 12px; font-size: var(--font-size-sm); font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                <span><i class="ph ph-brain"></i> AI Insight</span>
+                <span style="font-size: var(--font-size-xs); opacity: 0.8;">${analysis.model_used || 'llama3.2:1b'}</span>
+            </div>
+            <div style="padding: var(--space-md); background: var(--color-surface-elevated);">
+                <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                    <span class="badge" style="background: ${sevColor}; color: white; font-size: var(--font-size-xs);">${(analysis.severity || 'unknown').toUpperCase()}</span>
+                    ${analysis.category ? `<span class="badge" style="background: var(--color-bg-secondary); color: var(--color-text-secondary); font-size: var(--font-size-xs);">${analysis.category}</span>` : ''}
+                </div>
+                <div style="margin-bottom: var(--space-sm);">
+                    <strong style="font-size: var(--font-size-sm);">Crash Reason:</strong>
+                    <p style="font-size: var(--font-size-sm); margin: 4px 0 0 0; color: var(--color-text-secondary);">${Utils.dom.escapeHTML(analysis.crash_reason || 'Unknown')}</p>
+                </div>
+                <div>
+                    <strong style="font-size: var(--font-size-sm);">Suggested Fix:</strong>
+                    <p style="font-size: var(--font-size-sm); margin: 4px 0 0 0; color: var(--color-text-secondary);">${Utils.dom.escapeHTML(analysis.suggested_fix || 'No suggestion available')}</p>
+                </div>
+                ${analyzedAt ? `<div style="margin-top: var(--space-sm); font-size: var(--font-size-xs); color: var(--color-text-tertiary);">Analyzed: ${Utils.date.formatDateTime(analyzedAt)}</div>` : ''}
+                <div style="margin-top: var(--space-md); border-top: 1px solid var(--color-border); padding-top: var(--space-sm);">
+                    <button class="btn btn-secondary" style="font-size: var(--font-size-xs); padding: 4px 12px;"
+                        data-ai-context="${btoa(encodeURIComponent(JSON.stringify({cr: analysis.crash_reason || '', sf: analysis.suggested_fix || ''})))}"
+                        onclick="CrashEventsPanel._continueInChat(this)">
+                        <i class="ph ph-chat-dots"></i> Continue in Chat
+                    </button>
+                </div>
+            </div>
+        </div>`;
+    },
+
+    _continueInChat(btn) {
+        const encoded = btn.getAttribute('data-ai-context');
+        let crashReason = 'Unknown';
+        let suggestedFix = 'Unknown';
+        if (encoded) {
+            try {
+                const data = JSON.parse(decodeURIComponent(atob(encoded)));
+                crashReason = data.cr || 'Unknown';
+                suggestedFix = data.sf || 'Unknown';
+            } catch (e) {
+                console.error('Failed to decode AI context', e);
+            }
+        }
+
+        sessionStorage.setItem('aiChatContext', JSON.stringify({ crashReason, suggestedFix }));
+        window.location.hash = '#ai-engine';
+    },
+
+    async analyzeEvent(appId, eventId) {
+        const btn = document.getElementById(`ai-btn-${eventId}`);
+        const resultDiv = document.getElementById(`ai-result-${eventId}`);
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Analyzing...';
+        }
+        try {
+            const resp = await API.health.analyzeCrashEvent(appId, eventId);
+            if (resp.analysis && resp.analysis.success) {
+                resultDiv.innerHTML = CrashEventsPanel._renderAIInsight(resp.analysis, resp.analysis.analyzed_at);
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ph ph-brain"></i> Re-Analyze'; }
+            } else {
+                const errMsg = resp.analysis ? resp.analysis.error : 'Unknown error';
+                resultDiv.innerHTML = `<div style="margin-top: var(--space-sm); padding: var(--space-sm); background: #fff3cd; border-radius: var(--radius-sm); font-size: var(--font-size-sm); color: #856404;"><i class="ph ph-warning"></i> ${Utils.dom.escapeHTML(errMsg)}</div>`;
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ph ph-brain"></i> Retry Analysis'; }
+            }
+        } catch (err) {
+            resultDiv.innerHTML = `<div style="margin-top: var(--space-sm); padding: var(--space-sm); background: #f8d7da; border-radius: var(--radius-sm); font-size: var(--font-size-sm); color: var(--color-error);"><i class="ph ph-warning"></i> ${Utils.dom.escapeHTML(err.message || 'Analysis failed')}</div>`;
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ph ph-brain"></i> Retry Analysis'; }
+        }
+    }
+};
+
+Components.CrashEventsPanel = CrashEventsPanel;
