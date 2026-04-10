@@ -302,7 +302,7 @@ class AIService:
                 err_detail = response.json().get("error", response.text[:200])
             except Exception:
                 err_detail = response.text[:200]
-            return {"success": False, "response": f"AI engine error: {err_detail}"}
+            return {"success": False, "response": self._friendly_error(err_detail)}
 
         except requests.exceptions.ConnectionError:
             return {"success": False, "response": "Ollama is not running. Start it with: ollama serve"}
@@ -312,6 +312,24 @@ class AIService:
             return {"success": False, "response": str(e)}
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _friendly_error(self, raw_error: str) -> str:
+        """Translate known Ollama error strings into actionable user messages."""
+        err = raw_error.lower()
+        if "requires more system memory" in err or "not enough memory" in err or "out of memory" in err:
+            return (
+                f"The selected model is too large for available RAM ({raw_error.strip()}). "
+                "Switch to a smaller model in the AI Engine tab — "
+                "try: ollama pull llama3.2:1b  (1.3 GB) or  ollama pull phi3:mini  (2.3 GB)"
+            )
+        if "model not found" in err or "pull model" in err:
+            return (
+                f"Model not found locally: {self.model}. "
+                f"Run: ollama pull {self.model}  — or pick an installed model from the AI Engine tab."
+            )
+        if "connection refused" in err or "failed to connect" in err:
+            return "Ollama is not running. Start it with: ollama serve"
+        return f"AI engine error: {raw_error}"
 
     def _call_ollama(self, prompt: str, max_tokens: int = 300) -> Dict[str, Any]:
         """Generic Ollama generate call."""
@@ -328,9 +346,13 @@ class AIService:
             )
 
             if response.status_code != 200:
+                try:
+                    err_detail = response.json().get("error", response.text[:200])
+                except Exception:
+                    err_detail = response.text[:200]
                 return {
                     "success": False,
-                    "error": f"Ollama returned status {response.status_code}",
+                    "error": self._friendly_error(err_detail),
                     "analyzed_at": datetime.now(timezone.utc).isoformat(),
                 }
 
