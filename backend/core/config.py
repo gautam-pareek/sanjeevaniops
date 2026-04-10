@@ -26,9 +26,10 @@ class Settings(BaseSettings):
     # System operator (default user for API operations)
     default_operator: str = "system"
 
-    # Change ollama_model to switch AI models
-    # gemma4:e2b requires 5.4GB — too large for 4GB VRAM
-    # phi3:mini is 2.3GB — fits in 4GB VRAM with room to spare
+    # Default AI model — override with OLLAMA_MODEL env var or pick from the
+    # dashboard AI Engine view (shows all locally installed Ollama models).
+    # Run `ollama list` to see what is on your machine.
+    # Examples: "phi3:mini" (2.3 GB), "llama3.2:1b" (1.3 GB), "gemma2:2b" (1.6 GB)
     ollama_model: str = "phi3:mini"
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout: int = 120

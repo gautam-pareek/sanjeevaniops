@@ -783,6 +783,53 @@ def get_ai_status():
     }
 
 
+@router.get(
+    "/ai/models",
+    summary="List locally available Ollama models",
+    description="Returns all models currently installed on this machine via Ollama.",
+)
+def list_ai_models():
+    """Return every model Ollama has pulled locally."""
+    from ai_engine.ai_service import ai_service
+    import requests as _requests
+
+    try:
+        r = _requests.get(f"{ai_service.base_url}/api/tags", timeout=5)
+        if r.status_code != 200:
+            return {"available": False, "models": [], "active_model": ai_service.model}
+        models = [m["name"] for m in r.json().get("models", [])]
+        return {"available": True, "models": models, "active_model": ai_service.model}
+    except Exception:
+        return {"available": False, "models": [], "active_model": ai_service.model}
+
+
+class AIModelSelectRequest(BaseModel):
+    model: str
+
+
+@router.post(
+    "/ai/model",
+    summary="Switch the active AI model",
+    description="Change which locally installed Ollama model is used for analysis. Takes effect immediately.",
+)
+def set_ai_model(body: AIModelSelectRequest):
+    """Switch the active model at runtime — no server restart required."""
+    from ai_engine.ai_service import ai_service
+
+    if not body.model or not body.model.strip():
+        return {"success": False, "error": "Model name cannot be empty."}
+
+    ai_service.model = body.model.strip()
+    ai_service._resolved_model = None  # force re-resolve on next is_available()
+    available = ai_service.is_available()
+    return {
+        "success": True,
+        "active_model": ai_service.model,
+        "available": available,
+        "message": f"Switched to '{ai_service.model}'" + ("" if available else " — model not found locally, check the name."),
+    }
+
+
 class AIChatRequest(BaseModel):
     message: str
     context: Optional[str] = None

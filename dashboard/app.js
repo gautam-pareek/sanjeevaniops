@@ -1010,14 +1010,16 @@ async function renderAIEngineView() {
     const contentView = document.getElementById('content-view');
     contentView.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><p>Initializing AI Engine...</p></div>';
 
-    // Fetch AI status and all crash events
-    let aiStatus = { available: false, model: 'llama3.2:1b', message: 'Checking...' };
+    // Fetch AI status, available models, and all crash events
+    let aiStatus = { available: false, model: '', message: 'Checking...' };
+    let aiModels = { available: false, models: [], active_model: '' };
     let allApps = [];
     let allCrashEvents = [];
 
     try {
-        [aiStatus, allApps] = await Promise.all([
-            API.health.getAIStatus().catch(() => ({ available: false, model: 'llama3.2:1b', message: 'Cannot reach AI engine' })),
+        [aiStatus, aiModels, allApps] = await Promise.all([
+            API.health.getAIStatus().catch(() => ({ available: false, model: '', message: 'Cannot reach AI engine' })),
+            API.health.listAIModels().catch(() => ({ available: false, models: [], active_model: '' })),
             API.applications.list({ status: 'active' }).then(r => r.applications || []).catch(() => [])
         ]);
 
@@ -1069,13 +1071,18 @@ async function renderAIEngineView() {
                         <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                         <span style="font-size: 11px; font-weight: 600;">Engine: ${statusText}</span>
                     </div>
-                    <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
+                    <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 8px 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
                         <i class="ph ph-cpu" style="font-size: 14px;"></i>
-                        <span style="font-size: 11px; font-weight: 600;">Model: ${aiStatus.model || 'llama3.2:1b'}</span>
+                        ${aiModels.models.length > 1
+                            ? `<select id="ai-model-select" style="background: transparent; border: none; color: white; font-size: 11px; font-weight: 600; cursor: pointer; outline: none; max-width: 180px;">
+                                ${aiModels.models.map(m => `<option value="${m}" style="background: var(--color-primary); color: white;" ${m === (aiModels.active_model || aiStatus.model) ? 'selected' : ''}>${m}</option>`).join('')}
+                               </select>`
+                            : `<span style="font-size: 11px; font-weight: 600;">${aiStatus.model || 'No model'}</span>`
+                        }
                     </div>
                     <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
                         <i class="ph ph-hard-drives" style="font-size: 14px;"></i>
-                        <span style="font-size: 11px; font-weight: 600;">Local Mode</span>
+                        <span style="font-size: 11px; font-weight: 600;">Local · ${aiModels.models.length} model${aiModels.models.length !== 1 ? 's' : ''} installed</span>
                     </div>
                 </div>
             </div>
@@ -1090,7 +1097,7 @@ async function renderAIEngineView() {
                 <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.6;">
                     Ollama is not running. AI-enhanced root-cause analysis and fix suggestions are unavailable.<br>
                     Start it with: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama serve</code>
-                    &nbsp;then pull the model: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull ${aiStatus.model || 'gemma4:e2b'}</code>
+                    ${aiStatus.model ? `&nbsp;then pull your model: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull ${aiStatus.model}</code>` : '&nbsp;then pull a model of your choice (e.g. <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull phi3:mini</code>)'}
                 </div>
                 <div style="margin-top: 8px; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
                     The recovery playbook (deterministic analysis) will still work — only the AI narrative fix steps require Ollama.
@@ -1225,6 +1232,23 @@ async function renderAIEngineView() {
             .typing-dot:nth-child(3) { animation: none; opacity: 1; }
         </style>
     `;
+
+    // Wire up model selector if multiple models are available
+    const modelSelect = document.getElementById('ai-model-select');
+    if (modelSelect) {
+        modelSelect.addEventListener('change', async () => {
+            const chosen = modelSelect.value;
+            try {
+                const res = await API.health.setAIModel(chosen);
+                showToast(res.available
+                    ? `Switched to ${chosen}`
+                    : `Switched to ${chosen} (not found locally — check name)`,
+                    res.available ? 'success' : 'warning');
+            } catch (err) {
+                showToast('Failed to switch model', 'error');
+            }
+        });
+    }
 
     // Check if we have crash context from "Continue in Chat" button
     const _checkChatContext = () => {

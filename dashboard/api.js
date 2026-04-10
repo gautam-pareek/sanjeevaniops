@@ -233,6 +233,17 @@ const HealthAPI = {
       return await apiFetch('/applications/ai/status');
    },
 
+   async listAIModels() {
+      return await apiFetch('/applications/ai/models');
+   },
+
+   async setAIModel(model) {
+      return await apiFetch('/applications/ai/model', {
+         method: 'POST',
+         body: { model }
+      });
+   },
+
    async aiChat(message, context = null) {
       return await apiFetch('/applications/ai/chat', {
          method: 'POST',
