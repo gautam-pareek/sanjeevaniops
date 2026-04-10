@@ -281,8 +281,8 @@ Broken redirect chains (e.g. 302 → 404) are recorded with the full hop sequenc
 
 The **AI Engine** tab in the dashboard provides:
 
-- **Engine status** — live-polled every 20 seconds; badge updates the moment Ollama starts or stops
-- **Model selector** — dropdown lists every locally installed Ollama model; switch with one click, takes effect immediately (no restart needed); auto-selects first available model on startup
+- **Engine status** — live-polled every 20 seconds; badge updates the moment Ollama starts or stops; offline message distinguishes "Ollama down" from "model not installed" and names what IS available
+- **Model selector** — dropdown lists every locally installed Ollama model; switch with one click, takes effect immediately (no restart needed)
 - **Aggregate metrics** — total crash events, analyses complete, pending, critical/high count
 - **Severity distribution** and failure category breakdown
 - **Batch Analysis** — analyze all unanalyzed crash events with one click and progress tracking

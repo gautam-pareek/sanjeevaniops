@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-04-10 (Session 7)
+Last updated: 2026-04-10 (Session 8)
 
 ---
 
@@ -110,6 +110,11 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | Engine shows Offline when user has a different Ollama model | `is_available()` now auto-selects first locally installed model when configured model not found — any Ollama model works immediately |
 | Offline banner hardcoded `ollama pull phi3:mini` | Banner now shows generic examples (`phi3:mini`, `llama3.2:1b`) — not tied to configured default |
 | App detail view unaware of AI status | `renderApplicationDetailView` now fetches AI status and passes `aiAvailable` flag to `CrashEventsPanel` |
+| `is_available()` silently mutated `self.model` to a random installed model | Removed mutation entirely — `is_available()` is now read-only; model can only change via explicit user action in the dashboard |
+| Fuzzy model match `config_base in m` too broad — could hit unintended larger models | Replaced with exact match only: `m == self.model` or `m == self.model + ":latest"` |
+| Ollama OOM/not-found errors shown as raw cryptic strings in chat and analyze | `_friendly_error()` translates known Ollama errors into actionable guidance (switch model, pull model, start Ollama) |
+| Offline banner always said "Ollama is not running" regardless of actual cause | Banner now uses backend message directly — distinguishes: Ollama down vs model not installed vs model found |
+| `/ai/status` could not tell user what models are actually installed | Now returns `installed_models[]` — when configured model missing, message names what IS installed so user knows what to switch to |
 
 ---
 

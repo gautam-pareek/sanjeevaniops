@@ -83,12 +83,15 @@
 ### AI Engine
 
 #### Architecture
-- `ai_engine/ai_service.py` — Ollama HTTP client; `model` field is mutable at runtime
+- `ai_engine/ai_service.py` — Ollama HTTP client; `model` field is mutable at runtime via explicit user action only
 - Default model: set via `OLLAMA_MODEL` env var or `settings.ollama_model` in `backend/core/config.py`
-- **Auto-model detection**: `is_available()` first tries the configured model; if not found but Ollama is running with other models, it automatically selects the first available model. This means any user with any Ollama model gets AI features immediately — no config editing required.
+- **`is_available()` is read-only**: checks if the configured model is installed, returns True/False, never changes `self.model`. Model switching only happens when the user explicitly selects from the dashboard dropdown.
+- **`list_installed_models()`**: side-effect-free helper that returns all Ollama model names. Used by `/ai/status` to inform the user what IS available when their configured model is missing.
+- **Model match is exact**: `m == self.model` or `m == self.model + ":latest"` only — no substring/prefix matching that could accidentally hit a larger model with a similar name.
 - **Runtime model switching**: `GET /ai/models` returns all locally installed models; `POST /ai/model` changes the active model in-process — no restart needed
 - Dashboard AI Engine tab queries `/ai/models` on load and renders a dropdown selector when multiple models are installed; changing it calls `/ai/model`
 - **Live status polling**: AI Engine page polls `/ai/status` every 20 seconds and updates the Engine badge and offline banner in-place — status reflects reality even if Ollama is stopped or started while the page is open
+- **Actionable error messages**: `_friendly_error()` translates raw Ollama errors (OOM, model not found, connection refused) into user-friendly guidance with specific commands to run
 
 #### Crash Analysis — What Is Deterministic vs AI
 
