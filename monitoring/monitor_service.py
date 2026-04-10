@@ -12,12 +12,14 @@ It never triggers recovery actions. That is Feature 4's responsibility.
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Dict, Any
 
 from backend.core.database import db
 from backend.repositories.health_repository import HealthRepository
 from backend.repositories.application_repository import ApplicationRepository
+from backend.repositories.recovery_repository import RecoveryRepository
 from backend.services.docker_service import DockerService
 from monitoring.health_checker import HealthChecker, CheckResult
 
@@ -34,44 +36,38 @@ class MonitorService:
         self._checker = HealthChecker()
         self._health_repo = HealthRepository()
         self._app_repo = ApplicationRepository()
+        self._recovery_repo = RecoveryRepository()
         self._docker = DockerService()
 
     # ------------------------------------------------------------------
     # Public: called by the scheduler for each app
     # ------------------------------------------------------------------
 
-    def run_check_for_app(self, app_id: str) -> None:
+    def run_check_for_app(self, app_id: str, is_manual: bool = False) -> None:
         """
-        Execute a health check for the given application and persist the result.
-        Designed to be called from a background scheduler thread.
-
-        Never raises — all exceptions are caught and logged so the scheduler
-        job does not die on individual app failures.
+        Execute and persist a health check for a single app.
+        is_manual: if True, bypasses the monitoring_paused check.
         """
-        import traceback
         try:
-            self._execute_and_persist(app_id)
+            self._execute_and_persist(app_id, is_manual=is_manual)
         except Exception as e:
-            print(f"[HEALTH CHECK ERROR] app={app_id} error={e}", flush=True)
-            print(traceback.format_exc(), flush=True)
+            logger.error("[HEALTH CHECK ERROR] app=%s error=%s", app_id, e, exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal: check execution and persistence
     # ------------------------------------------------------------------
 
-    def _execute_and_persist(self, app_id: str) -> None:
+    def _execute_and_persist(self, app_id: str, is_manual: bool = False) -> None:
         with db.get_connection() as conn:
-            # Load application config
             app = self._app_repo.get_application(conn, app_id)
             if not app:
-                logger.warning("Health check skipped — app %s not found", app_id)
                 return
 
             if app["status"] != "active":
-                logger.debug("Health check skipped — app %s is inactive", app_id)
                 return
 
-            if app.get("monitoring_paused") and app.get("paused_by"):
+            # Manual checks bypass the "paused" flag
+            if app.get("monitoring_paused") and app.get("paused_by") and not is_manual:
                 logger.debug("Health check skipped — app %s is paused by %s", app_id, app.get("paused_by"))
                 return
 
@@ -126,18 +122,7 @@ class MonitorService:
                 # Capture crash event only on first transition to unhealthy
                 if prev_status != "unhealthy":
                     self._capture_crash_event(conn, app_id, container_name, result_id)
-                logger.warning(
-                    "[UNHEALTHY] app=%s container=%s — container is %s, skipping check",
-                    app_id, container_name, container_info.get("status"),
-                )
                 return
-
-            logger.debug(
-                "Running %s health check for app %s (%s)",
-                check_type,
-                app_id,
-                container_name,
-            )
 
             # Execute check
             result: CheckResult = self._checker.run_check(
@@ -209,7 +194,13 @@ class MonitorService:
             # Capture crash event if status just flipped to unhealthy
             previous_status = current_status_row["current_status"] if current_status_row else "unknown"
             if new_status == "unhealthy" and previous_status != "unhealthy":
-                self._capture_crash_event(conn, app_id, container_name, result_id)
+                event_id = self._capture_crash_event(conn, app_id, container_name, result_id)
+                # Trigger auto-recovery if the app's policy enables it
+                self._maybe_auto_restart(app, container_name, event_id, first_failure_at)
+            elif new_status == "unhealthy":
+                # Already unhealthy — check if a scheduled restart is still warranted
+                # (e.g. first auto-restart didn't bring it back)
+                self._maybe_auto_restart(app, container_name, None, first_failure_at)
 
             self._log_outcome(app_id, container_name, result, new_status, consecutive_failures)
 
@@ -255,8 +246,8 @@ class MonitorService:
 
     def _capture_crash_event(
         self, conn, app_id: str, container_name: str, result_id: str
-    ) -> None:
-        """Pull Docker logs and store as a crash event."""
+    ) -> str | None:
+        """Pull Docker logs and store as a crash event. Returns the event_id or None."""
         try:
             # Avoid duplicate crash events for the same result
             if self._health_repo.crash_event_exists_for_result(conn, result_id):
@@ -294,8 +285,74 @@ class MonitorService:
                 "[CRASH EVENT] app=%s container=%s event_id=%s — logs captured (%d chars)",
                 app_id, container_name, event_id, len(logs),
             )
+            return event_id
         except Exception as e:
             logger.error("Failed to capture crash event for app %s: %s", app_id, str(e))
+        return None
+
+    def _maybe_auto_restart(
+        self,
+        app: Dict[str, Any],
+        container_name: str,
+        event_id: str | None,
+        first_failure_at: str | None,
+    ) -> None:
+        """
+        Schedule a delayed container restart if the app's recovery policy allows it.
+        Uses first_failure_at as the window for counting prior auto-restarts so the
+        counter resets if the app recovers and fails again later.
+        """
+        policy = app.get("recovery_policy_config", {})
+        if not policy.get("enabled"):
+            return
+
+        max_attempts = int(policy.get("max_restart_attempts", 3))
+        base_delay = float(policy.get("restart_delay_seconds", 30))
+        backoff = float(policy.get("backoff_multiplier", 1.5))
+        app_id = app["app_id"]
+
+        # Count how many auto-restarts have already been done in this failure episode
+        since = first_failure_at or datetime.now(timezone.utc).isoformat()
+        with db.get_connection() as conn:
+            attempts_done = self._recovery_repo.count_auto_restarts_since(conn, app_id, since)
+
+        if attempts_done >= max_attempts:
+            logger.warning(
+                "[AUTO-RECOVERY] app=%s exhausted max attempts (%d/%d) — manual intervention required",
+                app_id, attempts_done, max_attempts,
+            )
+            return
+
+        delay = base_delay * (backoff ** attempts_done)
+        logger.info(
+            "[AUTO-RECOVERY] app=%s scheduling restart in %.0fs (attempt %d/%d)",
+            app_id, delay, attempts_done + 1, max_attempts,
+        )
+
+        def _do_restart():
+            try:
+                result = self._docker.restart_container(container_name)
+                with db.get_connection() as conn:
+                    self._recovery_repo.create_action(
+                        conn=conn,
+                        app_id=app_id,
+                        container_name=container_name,
+                        requested_by="auto-recovery",
+                        status="executed" if result["success"] else "failed",
+                        result_message=result["message"],
+                        event_id=event_id,
+                        action_type="restart",
+                    )
+                logger.info(
+                    "[AUTO-RECOVERY] app=%s restart %s: %s",
+                    app_id, "succeeded" if result["success"] else "failed", result["message"],
+                )
+            except Exception as exc:
+                logger.error("[AUTO-RECOVERY] app=%s restart error: %s", app_id, exc)
+
+        t = threading.Timer(delay, _do_restart)
+        t.daemon = True
+        t.start()
 
     def _log_outcome(
         self,

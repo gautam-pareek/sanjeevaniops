@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
         db.execute_migration("migrations/002_health_check_monitoring.sql")
         db.execute_migration("migrations/003_monitoring_pause.sql")
         db.execute_migration("migrations/004_crash_events.sql")
+        db.execute_migration("migrations/005_recovery_actions.sql")
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database initialization failed: {e}")

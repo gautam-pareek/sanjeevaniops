@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-03-28 (Session 3)
+Last updated: 2026-04-10 (Session 5)
 
 ---
 
@@ -42,18 +42,34 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 - Crash event captured on first healthy→unhealthy transition
 - Docker logs pulled and stored in `crash_events` table (migration 004)
 - Dashboard crash events panel shows logs + container status + exit code
+- **Live log refresh** — every time crash events are loaded, fresh logs are fetched from Docker and the DB record is updated. No stale logs.
 - API: GET `/crash-events`, GET `/crash-events/{event_id}`
 
 ### Feature 5: AI Log Analysis (Ollama) ✅
-- Local Ollama with `llama3.2:1b` model (~1.3GB, runs on basic laptops)
-- **Crash analysis**: Cross-references health check sub-check results (primary) + Docker logs (supplementary) → returns crash_reason, suggested_fix, severity, category (JSON)
-- **Health-check-first prompt**: AI sees triggering health check's sub-check PASS/FAIL details and recent unhealthy checks BEFORE container logs — prevents hallucination
+- Local Ollama with `phi3:mini` model (~2.3GB, fits in 4GB VRAM)
+- Model is configurable via `settings.ollama_model` in `backend/core/config.py`
+- **Crash analysis**: Cross-references health check sub-check results (primary) + live Docker logs (supplementary) → returns crash_reason, severity, category, playbook_steps, files_to_check, commands, quick_check (JSON)
+- **Health-check-first prompt**: AI sees triggering health check's sub-check PASS/FAIL details and fresh container logs — prevents hallucination
 - **Re-runnable**: "Analyze with AI" button stays visible as "Re-Analyze" after first analysis; previous crash_reason passed as context to model
 - **Continue in Chat**: Button on AI insight panel stores context in sessionStorage, navigates to AI Engine, auto-sends the crash context to the AI chat for follow-up discussion
 - **AI Operations Center**: Dedicated dashboard tab with metrics cards, severity distribution bars, failure category breakdown, batch analysis with progress bar
 - **Scoped AI Chat**: Chat assistant that only answers DevOps/container/monitoring questions; politely refuses unrelated queries
 - **AI Status endpoint**: `GET /ai/status` — checks Ollama availability and model status
 - Endpoints: `POST /{event_id}/analyze`, `GET /ai/status`, `POST /ai/chat`
+
+### Feature 6: Recovery Actions ✅
+- **Deterministic Recovery Playbook**: Built from sub-check failure patterns with zero AI involvement — identifies root cause pattern (404, 5xx, body keywords, crash-loop, slow response, bad JSON, broken redirect) and maps to numbered fix steps + files to inspect
+- **Broken Redirect Detection**: Live HTTP probe on analysis — detects 302→404 chains, points playbook to `nginx.conf` not missing file
+- **AI Structured Fix Steps**: When Ollama is available, AI adds structured `fix_steps`, `commands`, and `quick_check` fields on top of the deterministic playbook
+- **AI Offline Indicator**: Yellow banner in both Recovery Playbook panel and AI Engine page when Ollama is not running — includes `ollama serve` command
+- **Recovery Playbook UI**: Full panel on crash event with numbered steps ①②③, clickable file badges (copy-to-clipboard), monospace command blocks (click-to-copy), quick verify command
+- **Continue in Chat (enriched)**: Passes full playbook steps + files to inspect + severity into AI chat context — AI reasons from evidence not from guessing
+- **Container Restart (manual)**: Amber-colored "Restart Container" button with confirmation modal labelled as "temporary relief only"
+- **Auto-Recovery Engine**: If `recovery_policy.enabled` is true, monitoring engine auto-restarts the container after failure — respects `max_restart_attempts`, `restart_delay_seconds`, and `backoff_multiplier`; resets attempt counter when app recovers
+- **Audit Trail**: Every restart (manual or auto) logged to `recovery_actions` table with `requested_by` operator or `auto-recovery`
+- **Recovery History Panel**: Audit table visible in app detail page below crash events
+- Migration: `005_recovery_actions.sql`
+- Endpoints: `POST /{event_id}/restart`, `GET /{app_id}/recovery-actions`
 
 ---
 
@@ -79,6 +95,15 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | AI analysis one-shot only | Button now stays visible as "Re-Analyze", previous analysis passed as context |
 | AI hallucinating crash reasons | Restructured prompt: health check sub-checks as PRIMARY evidence before container logs |
 | Continue in Chat not passing context | Switched from inline onclick to sessionStorage + auto-send approach |
+| Crash event logs always showing stale data | `list_crash_events` and `get_crash_event` now fetch live Docker logs on every call and update the DB record |
+| AI never received container logs | `get_fix_suggestion` now accepts `container_logs` param; fresh logs passed on every analyze call |
+| Debug print spam in monitoring | Replaced all `print([DEBUG]/[STEP-N]/[SKIP])` with proper `logger` calls |
+| Recovery playbook wrong for broken redirects | Live-probe in `analyze_crash_event` detects 302→4xx chain; routes to nginx.conf not missing file |
+| `requests.Response` 404 falsy breaks probe | Changed `if _probe and` → `if _probe is not None and` |
+| Dashboard flickering on every navigation | `showLoading` now only fires the dark overlay on first page load; route transitions are direct |
+| Continue in Chat missing playbook context | Chat context now includes playbook steps, files, severity — AI reasons from full evidence |
+| AI Engine page silent when Ollama offline | Yellow offline banner added with `ollama serve` instructions |
+| Recovery policy never executed | `_maybe_auto_restart()` added to `monitor_service` — fires after unhealthy transition, respects backoff + max attempts |
 
 ---
 
@@ -90,15 +115,13 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | 002_health_check_monitoring.sql | ✅ Applied | Health check results, app health status |
 | 003_monitoring_pause.sql | ✅ Applied | monitoring_paused, paused_at, paused_by, pause_reason |
 | 004_crash_events.sql | ✅ Applied | crash_events table with ai_analysis, ai_analyzed_at |
+| 005_recovery_actions.sql | ✅ Applied | recovery_actions audit log table |
 
 ---
 
 ## In Progress / Next
 
-### Feature 6: Recovery Actions 🔜
-- Manual one-click container restart from dashboard
-- Human approval required
-- Log all actions with operator + timestamp
+All planned features are complete. The project is in verification/testing phase.
 
 ---
 
@@ -108,6 +131,19 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 |------|-----------|------|-------------|--------------|
 | testsite | testsite-container | 8085 | /settings.html | 404 status |
 | testsite2 (ShopEasy) | testsite2-container | 8086 | /checkout.html | Body keywords (200 but contains error text) |
+| testsite3 (DevShop) | testsite3-container | 8087 | /checkout | Broken redirect — 302→/chekout.html (typo)→404 |
+
+---
+
+## AI Model
+
+| Setting | Value |
+|---------|-------|
+| Model | `phi3:mini` |
+| Size | ~2.3GB |
+| VRAM | Fits in 4GB |
+| Config | `backend/core/config.py` → `ollama_model` |
+| Fallback | Change `ollama_model` in config — no code changes needed |
 
 ---
 
@@ -124,4 +160,4 @@ apscheduler>=3.10.4
 requests>=2.31.0
 ```
 
-External: Ollama (must be installed separately with `ollama pull llama3.2:1b`)
+External: Ollama (must be installed separately with `ollama pull phi3:mini`)

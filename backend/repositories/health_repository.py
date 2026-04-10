@@ -267,15 +267,21 @@ class HealthRepository:
         return dict(row) if row else None
 
     def update_crash_event_analysis(
-        self, conn, event_id: str, ai_analysis: str
+        self, conn, event_id: str, ai_analysis: str, container_logs: str = None
     ) -> None:
-        """Store AI analysis result on a crash event."""
+        """Store AI analysis result on a crash event. Optionally refreshes container_logs."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            "UPDATE crash_events SET ai_analysis = ?, ai_analyzed_at = ? WHERE event_id = ?",
-            (ai_analysis, now, event_id),
-        )
+        if container_logs is not None:
+            conn.execute(
+                "UPDATE crash_events SET ai_analysis = ?, ai_analyzed_at = ?, container_logs = ? WHERE event_id = ?",
+                (ai_analysis, now, container_logs, event_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE crash_events SET ai_analysis = ?, ai_analyzed_at = ? WHERE event_id = ?",
+                (ai_analysis, now, event_id),
+            )
 
     def crash_event_exists_for_result(self, conn, result_id: str) -> bool:
         row = conn.execute(
@@ -283,3 +289,13 @@ class HealthRepository:
             (result_id,)
         ).fetchone()
         return row is not None
+
+    def delete_old_crash_events(self, conn, retention_minutes: int) -> int:
+        """Delete crash events older than retention_minutes. Returns count deleted."""
+        cutoff = datetime.now(timezone.utc).timestamp() - (retention_minutes * 60)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        result = conn.execute(
+            "DELETE FROM crash_events WHERE captured_at < ?",
+            (cutoff_iso,)
+        )
+        return result.rowcount

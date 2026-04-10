@@ -20,8 +20,24 @@ from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
 
 from monitoring.monitor_service import MonitorService
+from backend.core.config import settings
+from backend.core.database import db
+from backend.repositories.health_repository import HealthRepository
 
 logger = logging.getLogger(__name__)
+
+_health_repo = HealthRepository()
+
+
+def _cleanup_old_crash_events() -> None:
+    """Delete crash events older than the configured retention period."""
+    try:
+        with db.get_connection() as conn:
+            deleted = _health_repo.delete_old_crash_events(conn, settings.crash_event_retention_minutes)
+        if deleted:
+            logger.info("Cleaned up %d crash event(s) older than %d minutes", deleted, settings.crash_event_retention_minutes)
+    except Exception as e:
+        logger.error("Crash event cleanup failed: %s", e)
 
 # Job ID prefix — makes jobs easy to identify and remove
 _JOB_PREFIX = "healthcheck_"
@@ -55,6 +71,16 @@ class MonitorScheduler:
     def start(self) -> None:
         """Start the scheduler. Called on application startup."""
         self._scheduler.start()
+        # Cleanup job: runs every 30 minutes, deletes events older than retention window
+        self._scheduler.add_job(
+            func=_cleanup_old_crash_events,
+            trigger="interval",
+            minutes=30,
+            id="crash_event_cleanup",
+            name="Crash event cleanup",
+        )
+        # Run once immediately on startup to clear stale events right away
+        _cleanup_old_crash_events()
         logger.info("MonitorScheduler started")
 
     def stop(self) -> None:
@@ -80,13 +106,21 @@ class MonitorScheduler:
         active_app_ids = set()
 
         for app in applications:
-            if app["status"] != "active":
+            app_id = app.get("app_id")
+            name = app.get("name")
+            status = app.get("status")
+
+            if status != "active":
                 continue
 
-            app_id = app["app_id"]
             active_app_ids.add(app_id)
-            interval = app["health_check_config"].get("interval_seconds", 30)
 
+            hc_config = app.get("health_check_config")
+            if not hc_config:
+                logger.warning("App %s (%s) has no health_check_config — skipping", name, app_id)
+                continue
+
+            interval = hc_config.get("interval_seconds", 30)
             job_id = f"{_JOB_PREFIX}{app_id}"
             existing_job = self._scheduler.get_job(job_id)
 
@@ -96,17 +130,12 @@ class MonitorScheduler:
                 # Check if interval has changed
                 current_interval = existing_job.trigger.interval.total_seconds()
                 if current_interval != interval:
-                    logger.info(
-                        "Updating health check interval for app %s: %ds -> %ds",
-                        app_id,
-                        int(current_interval),
-                        interval,
-                    )
                     self._scheduler.reschedule_job(
                         job_id,
                         trigger="interval",
                         seconds=interval,
                     )
+                    logger.info("Updated health check interval for app %s: %ds -> %ds", name, current_interval, interval)
 
         # Remove jobs for apps that are no longer active
         for job in self._scheduler.get_jobs():
@@ -147,6 +176,7 @@ class MonitorScheduler:
         t = threading.Thread(
             target=self._service.run_check_for_app,
             args=(app_id,),
+            kwargs={"is_manual": True},
             daemon=True,
             name=f"manual-check-{app_id}",
         )

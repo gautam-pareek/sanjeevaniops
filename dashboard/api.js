@@ -53,8 +53,9 @@ async function apiFetch(endpoint, options = {}) {
          throw error;
       }
 
-      // Network or other errors
+      // Network or other errors — start retry loop so UI recovers automatically
       if (error.name === 'TypeError' && error.message.includes('fetch')) {
+         if (typeof startAPIRetry === 'function') startAPIRetry();
          throw new APIError('Cannot connect to API server. Is it running?', 0);
       }
 
@@ -237,6 +238,23 @@ const HealthAPI = {
          method: 'POST',
          body: { message, context }
       });
+   },
+
+   /**
+    * Restart the container linked to a crash event (temporary relief).
+    * Logs to recovery_actions audit table server-side.
+    */
+   async restartContainer(appId, eventId) {
+      return await apiFetch(`/applications/${appId}/crash-events/${eventId}/restart`, {
+         method: 'POST'
+      });
+   },
+
+   /**
+    * Get recovery action audit log for an application
+    */
+   async getRecoveryActions(appId, limit = 20) {
+      return await apiFetch(`/applications/${appId}/recovery-actions?limit=${limit}`);
    }
 };
 

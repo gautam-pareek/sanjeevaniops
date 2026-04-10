@@ -123,3 +123,37 @@ class DockerService:
             'created_at': created_at,
             'docker_inspect': attrs  # Full inspect output for caching
         }
+
+    def restart_container(self, container_name: str) -> Dict[str, Any]:
+        """
+        Restart a container by name.
+        Returns {success, message, restarted_at}.
+        This is a WRITE operation — used only for operator-approved recovery actions.
+        """
+        if not self._available:
+            return {
+                "success": False,
+                "message": "Docker daemon is not available.",
+                "restarted_at": None,
+            }
+        try:
+            container = self.client.containers.get(container_name)
+            container.restart(timeout=10)
+            now = datetime.now().isoformat()
+            return {
+                "success": True,
+                "message": f"Container '{container_name}' restarted successfully.",
+                "restarted_at": now,
+            }
+        except NotFound:
+            return {
+                "success": False,
+                "message": f"Container '{container_name}' not found.",
+                "restarted_at": None,
+            }
+        except DockerException as e:
+            return {
+                "success": False,
+                "message": f"Docker error: {str(e)}",
+                "restarted_at": None,
+            }

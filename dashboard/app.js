@@ -11,6 +11,7 @@ const AppState = {
     healthMap: {},          // app_id -> current_status
     currentOperator: localStorage.getItem('operator') || 'admin',
     apiConnected: false,
+    _retryInterval: null,
     applications: [],
     currentApp: null,
     filters: {
@@ -33,6 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize API status check
     await checkAPIStatus();
+    if (!AppState.apiConnected) startAPIRetry();
 
     // Setup navigation
     setupNavigation();
@@ -62,21 +64,40 @@ async function checkAPIStatus() {
 
     try {
         const isConnected = await API.healthCheck();
-
         AppState.apiConnected = isConnected;
 
         if (isConnected) {
-            if (statusDot) statusDot.classList.add('connected');
+            if (statusDot) { statusDot.classList.remove('error'); statusDot.classList.add('connected'); }
             if (statusText) statusText.textContent = 'API Connected';
         } else {
             throw new Error('API not responding');
         }
     } catch (error) {
         AppState.apiConnected = false;
-        if (statusDot) statusDot.classList.add('error');
-        if (statusText) statusText.textContent = 'API Offline';
+        if (statusDot) { statusDot.classList.remove('connected'); statusDot.classList.add('error'); }
+        if (statusText) statusText.textContent = 'API Offline — retrying...';
         console.warn('API connection failed:', error.message);
     }
+}
+
+// Poll until API comes back, then reload the current view automatically
+function startAPIRetry() {
+    if (AppState._retryInterval) return; // already retrying
+    AppState._retryInterval = setInterval(async () => {
+        try {
+            const ok = await API.healthCheck();
+            if (ok) {
+                clearInterval(AppState._retryInterval);
+                AppState._retryInterval = null;
+                AppState.apiConnected = true;
+                const dot = document.getElementById('api-status');
+                const txt = document.getElementById('api-status-text');
+                if (dot) { dot.classList.remove('error'); dot.classList.add('connected'); }
+                if (txt) txt.textContent = 'API Connected';
+                await refreshCurrentView();
+            }
+        } catch (_) {}
+    }, 5000);
 }
 
 // Setup navigation handlers
@@ -391,11 +412,12 @@ async function renderApplicationDetailView(appId) {
         showLoading(true);
 
         // Fetch app data and health status in parallel
-        const [app, healthStatus, healthHistory, crashEvents] = await Promise.all([
+        const [app, healthStatus, healthHistory, crashEvents, recoveryActions] = await Promise.all([
             API.applications.get(appId),
             API.health.getStatus(appId).catch(() => null),
             API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] })),
-            API.health.getCrashEvents(appId).catch(() => ({ events: [] }))
+            API.health.getCrashEvents(appId).catch(() => ({ events: [] })),
+            API.health.getRecoveryActions(appId).catch(() => ({ actions: [] }))
         ]);
         AppState.currentApp = app;
 
@@ -553,7 +575,8 @@ async function renderApplicationDetailView(appId) {
                 </div>
             </div>
 
-            ${Components.CrashEventsPanel.render(crashEvents.events, app.app_id)}
+            <div id="crash-events-panel-wrapper">${Components.CrashEventsPanel.render(crashEvents.events, app.app_id)}</div>
+            <div id="recovery-history-panel-wrapper">${Components.RecoveryHistoryPanel.render(recoveryActions.actions || [])}</div>
 
             <div style="margin-top: var(--space-xl);">
                 <button class="btn btn-primary" onclick="handleViewHistory('${app.app_id}')">
@@ -563,6 +586,25 @@ async function renderApplicationDetailView(appId) {
         `;
 
         showLoading(false);
+
+        // Silently refresh only the log <pre> content every 15 seconds — no DOM thrashing
+        const logRefreshInterval = setInterval(async () => {
+            if (AppState.currentRoute !== `app/${appId}`) {
+                clearInterval(logRefreshInterval);
+                return;
+            }
+            try {
+                const fresh = await API.health.getCrashEvents(appId).catch(() => null);
+                if (!fresh) return;
+                for (const e of fresh.events) {
+                    const pre = document.getElementById(`log-pre-${e.event_id}`);
+                    if (pre && e.container_logs) {
+                        pre.textContent = e.container_logs.slice(-2000);
+                    }
+                }
+            } catch (_) {}
+        }, 15000);
+
     } catch (error) {
         showLoading(false);
         contentView.innerHTML = renderError('Failed to load application details', error.message);
@@ -854,12 +896,18 @@ function handleSaveOperator() {
 // UI Helper Functions
 
 function showLoading(show) {
+    // Only show the full-screen overlay during the very first app load.
+    // Route transitions swap content fast enough that the overlay is jarring
+    // (dark flash) rather than helpful. _initialLoadDone is set after the first
+    // DOMContentLoaded render completes.
+    if (show && window._initialLoadDone) return;
     const overlay = document.getElementById('loading-overlay');
     if (overlay) {
         if (show) {
             overlay.classList.remove('hidden');
         } else {
             overlay.classList.add('hidden');
+            window._initialLoadDone = true;
         }
     }
 }
@@ -1033,6 +1081,23 @@ async function renderAIEngineView() {
             </div>
         </div>
 
+        ${!aiStatus.available ? `
+        <!-- AI Offline Banner -->
+        <div style="border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--space-md) var(--space-lg); margin-bottom: var(--space-xl); background: rgba(234,179,8,0.08); display: flex; align-items: flex-start; gap: var(--space-md);">
+            <i class="ph ph-warning-circle" style="font-size: 24px; color: var(--color-warning); flex-shrink: 0; margin-top: 2px;"></i>
+            <div>
+                <div style="font-weight: 700; color: var(--color-warning); margin-bottom: 4px;">AI Engine Offline</div>
+                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.6;">
+                    Ollama is not running. AI-enhanced root-cause analysis and fix suggestions are unavailable.<br>
+                    Start it with: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama serve</code>
+                    &nbsp;then pull the model: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull ${aiStatus.model || 'gemma4:e2b'}</code>
+                </div>
+                <div style="margin-top: 8px; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
+                    The recovery playbook (deterministic analysis) will still work — only the AI narrative fix steps require Ollama.
+                </div>
+            </div>
+        </div>` : ''}
+
         <!-- Metrics Cards Row -->
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-lg); margin-bottom: var(--space-xl);">
             <div class="card" style="text-align: center; padding: var(--space-lg);">
@@ -1177,17 +1242,39 @@ async function renderAIEngineView() {
         sessionStorage.removeItem('aiChatContext');
         try {
             const ctx = JSON.parse(stored);
-            // Add crash context as a system message in the chat
+            const steps = ctx.steps || [];
+            const files = ctx.files || [];
+
+            // Build context card
             const contextDiv = document.createElement('div');
             contextDiv.style.cssText = 'padding: 10px 14px; background: var(--color-primary-light, #fff3e0); border-left: 3px solid var(--color-primary); border-radius: 6px; margin-bottom: 12px; font-size: 13px;';
-            contextDiv.innerHTML = `<strong style="display:block; margin-bottom:4px;"><i class="ph ph-brain"></i> Crash Analysis Context</strong>`
-                + `<div style="color: var(--color-text-secondary); margin-bottom:4px;"><strong>Issue:</strong> ${ctx.crashReason}</div>`
-                + `<div style="color: var(--color-text-secondary);"><strong>Suggested Fix:</strong> ${ctx.suggestedFix}</div>`;
+
+            const stepsHtml = steps.length > 0
+                ? `<div style="margin-top:6px;"><strong>Recovery Playbook:</strong><ol style="margin:4px 0 0 16px; padding:0; color:var(--color-text-secondary);">${steps.map(s => `<li style="margin-bottom:2px;">${Utils.dom.escapeHTML(s)}</li>`).join('')}</ol></div>`
+                : '';
+            const filesHtml = files.length > 0
+                ? `<div style="margin-top:6px;"><strong>Files to inspect:</strong> <span style="color:var(--color-text-secondary); font-family:monospace;">${files.map(f => Utils.dom.escapeHTML(f)).join(', ')}</span></div>`
+                : '';
+            const sevHtml = ctx.sev
+                ? `<span style="margin-left:8px; font-size:11px; padding:1px 7px; border-radius:999px; background:rgba(0,0,0,0.1);">${ctx.sev.toUpperCase()}</span>`
+                : '';
+
+            contextDiv.innerHTML = `<strong style="display:block; margin-bottom:6px;"><i class="ph ph-brain"></i> Crash Analysis Context${sevHtml}</strong>`
+                + `<div style="color:var(--color-text-secondary); margin-bottom:2px;"><strong>Issue:</strong> ${Utils.dom.escapeHTML(ctx.crashReason || 'Unknown')}</div>`
+                + stepsHtml
+                + filesHtml;
+
             messages.appendChild(contextDiv);
             messages.scrollTop = messages.scrollHeight;
 
-            // Pre-fill a question
-            input.value = 'Can you explain this issue in more detail and give step-by-step debugging instructions?';
+            // Build a pre-filled question that includes the playbook for richer AI reasoning
+            const playbookSummary = steps.length > 0
+                ? `\n\nRecovery Playbook:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+                : '';
+            const filesSummary = files.length > 0
+                ? `\n\nFiles to inspect: ${files.join(', ')}`
+                : '';
+            input.value = `Issue: ${ctx.crashReason || 'Unknown'}${playbookSummary}${filesSummary}\n\nCan you explain the root cause in more detail and suggest what exactly to change to fix this?`;
             input.focus();
 
             // Scroll chat into view

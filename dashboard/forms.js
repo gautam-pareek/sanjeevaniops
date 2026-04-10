@@ -409,7 +409,10 @@ const RegistrationWizard = {
 
         return `
             <div class="form-step">
-                <h3 style="margin-bottom: var(--space-lg);">Recovery Policy</h3>
+                <h3 style="margin-bottom: var(--space-sm);">Recovery Policy</h3>
+                <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm); margin-bottom: var(--space-lg);">
+                    When enabled, the monitoring engine will automatically restart the container after detecting a failure — up to the configured limit, with an increasing delay between attempts.
+                </p>
                 
                 <div class="form-group">
                     <label class="form-checkbox">
@@ -473,7 +476,7 @@ const RegistrationWizard = {
                                     type="checkbox" 
                                     checked
                                     disabled>
-                                <span>Container Restart (only action currently supported)</span>
+                                <span>Container Restart — triggered automatically by the monitoring engine</span>
                             </label>
                         </div>
                     </div>

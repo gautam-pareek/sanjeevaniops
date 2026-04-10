@@ -599,9 +599,22 @@ console.log('Health components loaded');
 
 const CrashEventsPanel = {
     render(events, appId) {
-        if (!events || events.length === 0) return '';
+        if (!events || events.length === 0) return `
+        <div id="crash-events-panel" class="card" style="margin-top: var(--space-xl);">
+            <div class="card-header">
+                <h4 class="card-title" style="color: var(--color-error);">
+                    <i class="ph ph-warning-octagon"></i> Crash Events
+                </h4>
+            </div>
+            <div class="card-body">
+                <p style="color: var(--color-text-tertiary); font-size: var(--font-size-sm); margin: 0;">
+                    <i class="ph ph-check-circle" style="color: var(--color-success);"></i>
+                    No crash events recorded. Events appear when a healthy container goes unhealthy.
+                </p>
+            </div>
+        </div>`;
         return `
-        <div class="card" style="margin-top: var(--space-xl);">
+        <div id="crash-events-panel" class="card" style="margin-top: var(--space-xl);">
             <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
                 <h4 class="card-title" style="color: var(--color-error);">
                     <i class="ph ph-warning-octagon"></i> Crash Events
@@ -620,13 +633,13 @@ const CrashEventsPanel = {
             : null;
 
         // Parse existing AI analysis if available
-        let aiHtml = '';
+        let playbookHtml = '';
         if (e.ai_analysis) {
             try {
                 const analysis = typeof e.ai_analysis === 'string' ? JSON.parse(e.ai_analysis) : e.ai_analysis;
-                aiHtml = CrashEventsPanel._renderAIInsight(analysis, e.ai_analyzed_at);
+                playbookHtml = CrashEventsPanel._renderPlaybook(analysis, e.ai_analyzed_at, appId, e.event_id);
             } catch {
-                aiHtml = `<div style="margin-top: var(--space-sm); padding: var(--space-sm); background: var(--color-surface-elevated); border-radius: var(--radius-sm); font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(String(e.ai_analysis))}</div>`;
+                playbookHtml = `<div style="margin-top: var(--space-sm); padding: var(--space-sm); background: var(--color-surface-elevated); border-radius: var(--radius-sm); font-size: var(--font-size-sm);">${Utils.dom.escapeHTML(String(e.ai_analysis))}</div>`;
             }
         }
 
@@ -655,14 +668,15 @@ const CrashEventsPanel = {
                 </div>
             </div>
             ${logPreview
-                ? `<pre style="font-size: 11px; font-family: var(--font-family-mono); background: var(--color-bg-secondary); border: 1px solid var(--color-border); padding: var(--space-sm); border-radius: var(--border-radius-sm); overflow-x: auto; max-height: 220px; overflow-y: auto; white-space: pre-wrap; color: var(--color-text-secondary); margin: 0;">${logPreview}</pre>`
-                : `<p style="font-size: var(--font-size-sm); color: var(--color-text-tertiary); margin: 0;">No logs captured</p>`
+                ? `<pre id="log-pre-${e.event_id}" style="font-size: 11px; font-family: var(--font-family-mono); background: var(--color-bg-secondary); border: 1px solid var(--color-border); padding: var(--space-sm); border-radius: var(--border-radius-sm); overflow-x: auto; max-height: 220px; overflow-y: auto; white-space: pre-wrap; color: var(--color-text-secondary); margin: 0;">${logPreview}</pre>`
+                : `<p id="log-pre-${e.event_id}" style="font-size: var(--font-size-sm); color: var(--color-text-tertiary); margin: 0;">No logs captured</p>`
             }
-            <div id="ai-result-${e.event_id}">${aiHtml}</div>
+            <div id="ai-result-${e.event_id}">${playbookHtml}</div>
         </div>`;
     },
 
-    _renderAIInsight(analysis, analyzedAt) {
+    // ── Recovery Playbook Panel ───────────────────────────────────────────────
+    _renderPlaybook(analysis, analyzedAt, appId, eventId) {
         const severityColors = {
             low: 'var(--color-success)',
             medium: 'var(--color-warning)',
@@ -671,35 +685,242 @@ const CrashEventsPanel = {
         };
         const sevColor = severityColors[analysis.severity] || 'var(--color-text-secondary)';
 
+        const playbookSteps = analysis.playbook_steps || [];
+        const filesToCheck  = analysis.files_to_check  || [];
+        const commands      = analysis.commands         || analysis.diagnostic_commands || [];
+        const fixSteps      = analysis.fix_steps        || [];
+        const quickCheck    = analysis.quick_check      || '';
+
+        // Numbered step icons ① ② ③ …
+        const stepNums = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+
+        const stepsToShow = playbookSteps.length > 0 ? playbookSteps : fixSteps;
+
         return `
         <div style="margin-top: var(--space-md); border: 1px solid var(--color-primary); border-radius: var(--radius-md); overflow: hidden;">
-            <div style="background: var(--color-primary); color: white; padding: 6px 12px; font-size: var(--font-size-sm); font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
-                <span><i class="ph ph-brain"></i> AI Insight</span>
-                <span style="font-size: var(--font-size-xs); opacity: 0.8;">${analysis.model_used || 'llama3.2:1b'}</span>
+
+            <!-- Header: Root Cause -->
+            <div style="background: var(--color-primary); color: white; padding: 6px 14px; font-size: var(--font-size-sm); font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                <span><i class="ph ph-magnifying-glass"></i> Root Cause</span>
+                <div style="display:flex; gap: 6px; align-items:center;">
+                    <span style="font-size: var(--font-size-xs); padding: 2px 8px; border-radius: 999px; background: ${sevColor}; color: white; font-weight:700;">${(analysis.severity || 'unknown').toUpperCase()}</span>
+                    ${analysis.category ? `<span style="font-size: var(--font-size-xs); padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,0.2); color: white;">${analysis.category}</span>` : ''}
+                </div>
             </div>
             <div style="padding: var(--space-md); background: var(--color-surface-elevated);">
-                <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);">
-                    <span class="badge" style="background: ${sevColor}; color: white; font-size: var(--font-size-xs);">${(analysis.severity || 'unknown').toUpperCase()}</span>
-                    ${analysis.category ? `<span class="badge" style="background: var(--color-bg-secondary); color: var(--color-text-secondary); font-size: var(--font-size-xs);">${analysis.category}</span>` : ''}
+                <p style="font-size: var(--font-size-sm); margin: 0; color: var(--color-text-secondary); line-height: 1.5;">
+                    ${Utils.dom.escapeHTML(analysis.crash_reason || 'Unknown')}
+                </p>
+            </div>
+
+            ${stepsToShow.length > 0 ? `
+            <!-- Recovery Playbook Steps -->
+            <div style="border-top: 1px solid var(--color-border);">
+                <div style="padding: 8px 14px; background: var(--color-bg-secondary); display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size: var(--font-size-sm); font-weight: 600; color: var(--color-text-primary);">
+                        <i class="ph ph-list-checks"></i> Recovery Playbook
+                    </span>
+                    <button onclick="CrashEventsPanel._copySteps(${JSON.stringify(stepsToShow).replace(/"/g,'&quot;')})"
+                            style="font-size: var(--font-size-xs); padding: 2px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: transparent; cursor: pointer; color: var(--color-text-secondary);">
+                        <i class="ph ph-copy"></i> Copy Steps
+                    </button>
                 </div>
-                <div style="margin-bottom: var(--space-sm);">
-                    <strong style="font-size: var(--font-size-sm);">Crash Reason:</strong>
-                    <p style="font-size: var(--font-size-sm); margin: 4px 0 0 0; color: var(--color-text-secondary);">${Utils.dom.escapeHTML(analysis.crash_reason || 'Unknown')}</p>
+                <div style="padding: var(--space-sm) var(--space-md) var(--space-md); background: var(--color-surface-elevated);">
+                    <ol style="margin:0; padding-left: 0; list-style:none; display:flex; flex-direction:column; gap: 8px;">
+                        ${stepsToShow.map((step, i) => `
+                            <li style="display:flex; gap: 10px; align-items:flex-start; font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height:1.5;">
+                                <span style="flex-shrink:0; font-weight:700; color: var(--color-primary); min-width:22px;">${stepNums[i] || `${i+1}.`}</span>
+                                <span>${Utils.dom.escapeHTML(step)}</span>
+                            </li>`).join('')}
+                    </ol>
                 </div>
-                <div>
-                    <strong style="font-size: var(--font-size-sm);">Suggested Fix:</strong>
-                    <p style="font-size: var(--font-size-sm); margin: 4px 0 0 0; color: var(--color-text-secondary);">${Utils.dom.escapeHTML(analysis.suggested_fix || 'No suggestion available')}</p>
+            </div>` : ''}
+
+            ${filesToCheck.length > 0 ? `
+            <!-- Files to Inspect -->
+            <div style="border-top: 1px solid var(--color-border); padding: var(--space-sm) var(--space-md); background: var(--color-bg-secondary);">
+                <span style="font-size: var(--font-size-xs); font-weight:600; color: var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.05em;">
+                    <i class="ph ph-folder-open"></i> Files to inspect
+                </span>
+                <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-top: 6px;">
+                    ${filesToCheck.map(f => `
+                        <span onclick="CrashEventsPanel._copyToClipboard('${Utils.dom.escapeHTML(f)}', this)"
+                              title="Click to copy"
+                              style="font-family: var(--font-family-mono); font-size: var(--font-size-xs); padding: 3px 10px; background: var(--color-surface-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; color: var(--color-text-primary); transition: background 0.15s;"
+                              onmouseover="this.style.background='var(--color-primary)';this.style.color='white';"
+                              onmouseout="this.style.background='var(--color-surface-elevated)';this.style.color='var(--color-text-primary)';">
+                            ${Utils.dom.escapeHTML(f)}
+                        </span>`).join('')}
                 </div>
-                ${analyzedAt ? `<div style="margin-top: var(--space-sm); font-size: var(--font-size-xs); color: var(--color-text-tertiary);">Analyzed: ${Utils.date.formatDateTime(analyzedAt)}</div>` : ''}
-                <div style="margin-top: var(--space-md); border-top: 1px solid var(--color-border); padding-top: var(--space-sm);">
-                    <button class="btn btn-secondary" style="font-size: var(--font-size-xs); padding: 4px 12px;"
-                        data-ai-context="${btoa(encodeURIComponent(JSON.stringify({cr: analysis.crash_reason || '', sf: analysis.suggested_fix || ''})))}"
-                        onclick="CrashEventsPanel._continueInChat(this)">
-                        <i class="ph ph-chat-dots"></i> Continue in Chat
+            </div>` : ''}
+
+            ${commands.length > 0 ? `
+            <!-- Diagnostic Commands -->
+            <div style="border-top: 1px solid var(--color-border); padding: var(--space-sm) var(--space-md); background: var(--color-bg-secondary);">
+                <span style="font-size: var(--font-size-xs); font-weight:600; color: var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.05em;">
+                    <i class="ph ph-terminal"></i> Run these commands
+                </span>
+                <div style="display:flex; flex-direction:column; gap: 5px; margin-top: 6px;">
+                    ${commands.map(cmd => `
+                        <div onclick="CrashEventsPanel._copyToClipboard('${Utils.dom.escapeHTML(cmd).replace(/'/g,"\\'")}', this)"
+                             title="Click to copy"
+                             style="font-family: var(--font-family-mono); font-size: 11px; padding: 5px 10px; background: #1e1e2e; color: #a6e3a1; border-radius: var(--radius-sm); cursor: pointer; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                            <code style="background:transparent; color:inherit;">${Utils.dom.escapeHTML(cmd)}</code>
+                            <i class="ph ph-copy" style="opacity:0.6; flex-shrink:0;"></i>
+                        </div>`).join('')}
+                </div>
+            </div>` : ''}
+
+            ${quickCheck ? `
+            <!-- Quick Verify -->
+            <div style="border-top: 1px solid var(--color-border); padding: var(--space-sm) var(--space-md); background: var(--color-bg-secondary); display:flex; align-items:center; gap: 10px;">
+                <span style="font-size: var(--font-size-xs); font-weight:600; color: var(--color-success); white-space:nowrap;">
+                    <i class="ph ph-check-circle"></i> Quick verify:
+                </span>
+                <code onclick="CrashEventsPanel._copyToClipboard('${Utils.dom.escapeHTML(quickCheck)}', this)"
+                      title="Click to copy"
+                      style="font-size: 11px; color: var(--color-text-secondary); cursor:pointer; background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm);">
+                    ${Utils.dom.escapeHTML(quickCheck)}
+                </code>
+            </div>` : ''}
+
+            ${analysis.ai_available === false ? `
+            <!-- AI Offline Notice -->
+            <div style="border-top: 1px solid var(--color-border); padding: var(--space-sm) var(--space-md); background: rgba(234,179,8,0.08); display:flex; align-items:center; gap: 8px;">
+                <i class="ph ph-warning-circle" style="color: var(--color-warning); flex-shrink:0;"></i>
+                <span style="font-size: var(--font-size-xs); color: var(--color-warning);">
+                    <strong>AI offline</strong> — AI-enhanced fix steps are unavailable. Start Ollama and re-analyze to get deeper recommendations.
+                    <code style="background: rgba(0,0,0,0.2); padding: 1px 6px; border-radius: 3px; margin-left:4px;">ollama serve</code>
+                </span>
+            </div>` : ''}
+
+            <!-- Action Bar -->
+            <div style="border-top: 1px solid var(--color-border); padding: var(--space-sm) var(--space-md); background: var(--color-surface-elevated); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap: 8px;">
+                <button class="btn btn-secondary" style="font-size: var(--font-size-xs); padding: 4px 12px;"
+                    data-ai-context="${btoa(encodeURIComponent(JSON.stringify({
+                        cr: analysis.crash_reason || '',
+                        sf: analysis.suggested_fix || '',
+                        steps: analysis.playbook_steps || [],
+                        files: analysis.files_to_check || [],
+                        sev: analysis.severity || '',
+                        cat: analysis.category || ''
+                    })))}"
+                    onclick="CrashEventsPanel._continueInChat(this)">
+                    <i class="ph ph-chat-dots"></i> Continue in Chat
+                </button>
+
+                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:3px;">
+                    <button id="restart-btn-${eventId}"
+                            onclick="CrashEventsPanel.confirmRestart('${appId}', '${eventId}')"
+                            style="font-size: var(--font-size-xs); padding: 4px 14px; border: 1px solid #d97706; border-radius: var(--radius-sm); background: rgba(217,119,6,0.1); color: #d97706; cursor:pointer; font-weight:600; transition: background 0.15s;"
+                            onmouseover="this.style.background='rgba(217,119,6,0.2)'"
+                            onmouseout="this.style.background='rgba(217,119,6,0.1)'">
+                        <i class="ph ph-arrow-counter-clockwise"></i> Restart Container
+                    </button>
+                    <span style="font-size: 10px; color: var(--color-text-tertiary);">⚠ Temporary relief — fix root cause above first</span>
+                </div>
+            </div>
+
+            ${analyzedAt ? `<div style="padding: 4px 14px; font-size: 10px; color: var(--color-text-tertiary); background: var(--color-bg-secondary);">Analyzed: ${Utils.date.formatDateTime(analyzedAt)} · Model: ${analysis.model_used || 'unknown'}</div>` : ''}
+        </div>`;
+    },
+
+    // ── Restart confirmation modal ────────────────────────────────────────────
+    confirmRestart(appId, eventId) {
+        // Remove any existing modal
+        const existing = document.getElementById('restart-confirm-modal');
+        if (existing) existing.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'restart-confirm-modal';
+        modal.style.cssText = `
+            position: fixed; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+            display: flex; align-items: center; justify-content: center; padding: 20px;
+        `;
+        modal.innerHTML = `
+            <div style="background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-xl); max-width: 480px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.4); border: 1px solid #d97706;">
+                <div style="display:flex; align-items:center; gap: 12px; margin-bottom: var(--space-md);">
+                    <span style="font-size: 28px; color: #d97706;"><i class="ph ph-warning"></i></span>
+                    <h3 style="margin:0; color: #d97706;">Restart Container?</h3>
+                </div>
+                <p style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height:1.6; margin-bottom: var(--space-md);">
+                    This will restart the container and restore uptime <strong>temporarily</strong>.
+                    The crash will recur unless you address the root cause identified in the Recovery Playbook above.
+                </p>
+                <p style="font-size: var(--font-size-sm); color: var(--color-text-tertiary); margin-bottom: var(--space-xl);">
+                    The restart will be logged to the recovery audit trail.
+                </p>
+                <div style="display:flex; gap: var(--space-md); justify-content:flex-end;">
+                    <button onclick="document.getElementById('restart-confirm-modal').remove()"
+                            style="padding: 8px 20px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: transparent; cursor: pointer; color: var(--color-text-secondary);">
+                        Cancel
+                    </button>
+                    <button onclick="CrashEventsPanel._executeRestart('${appId}', '${eventId}'); document.getElementById('restart-confirm-modal').remove();"
+                            style="padding: 8px 20px; border: 1px solid #d97706; border-radius: var(--radius-sm); background: #d97706; color: white; cursor: pointer; font-weight:600;">
+                        <i class="ph ph-arrow-counter-clockwise"></i> Yes, Restart
                     </button>
                 </div>
             </div>
-        </div>`;
+        `;
+        document.body.appendChild(modal);
+        // Click outside to close
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    },
+
+    async _executeRestart(appId, eventId) {
+        const btn = document.getElementById(`restart-btn-${eventId}`);
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Restarting…'; }
+        try {
+            const resp = await API.health.restartContainer(appId, eventId);
+            if (resp.success) {
+                CrashEventsPanel._showToast('Container restarted. Now apply the fix above to prevent recurrence.', 'success');
+            } else {
+                CrashEventsPanel._showToast(`Restart failed: ${resp.message}`, 'error');
+            }
+        } catch (err) {
+            CrashEventsPanel._showToast(`Restart error: ${err.message || 'Unknown error'}`, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ph ph-arrow-counter-clockwise"></i> Restart Container'; }
+        }
+    },
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+    _copySteps(steps) {
+        const text = steps.map((s, i) => `${i+1}. ${s}`).join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            CrashEventsPanel._showToast('Playbook steps copied to clipboard!', 'success');
+        }).catch(() => {
+            CrashEventsPanel._showToast('Copy failed — please select manually', 'error');
+        });
+    },
+
+    _copyToClipboard(text, el) {
+        navigator.clipboard.writeText(text).then(() => {
+            const orig = el.style.outline;
+            el.style.outline = '2px solid var(--color-success)';
+            setTimeout(() => { el.style.outline = orig; }, 800);
+            CrashEventsPanel._showToast(`Copied: ${text}`, 'success');
+        }).catch(() => {});
+    },
+
+    _showToast(message, type = 'success') {
+        const existing = document.getElementById('crash-panel-toast');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.id = 'crash-panel-toast';
+        const bg = type === 'success' ? 'var(--color-success)' : 'var(--color-error)';
+        toast.style.cssText = `
+            position: fixed; bottom: 24px; right: 24px; z-index: 99999;
+            background: ${bg}; color: white; padding: 10px 20px;
+            border-radius: var(--radius-md); font-size: var(--font-size-sm);
+            font-weight: 600; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            animation: slideInRight 0.3s ease;
+        `;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 4000);
     },
 
     _continueInChat(btn) {
@@ -715,7 +936,6 @@ const CrashEventsPanel = {
                 console.error('Failed to decode AI context', e);
             }
         }
-
         sessionStorage.setItem('aiChatContext', JSON.stringify({ crashReason, suggestedFix }));
         window.location.hash = '#ai-engine';
     },
@@ -725,12 +945,12 @@ const CrashEventsPanel = {
         const resultDiv = document.getElementById(`ai-result-${eventId}`);
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Analyzing...';
+            btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Analyzing…';
         }
         try {
             const resp = await API.health.analyzeCrashEvent(appId, eventId);
             if (resp.analysis && resp.analysis.success) {
-                resultDiv.innerHTML = CrashEventsPanel._renderAIInsight(resp.analysis, resp.analysis.analyzed_at);
+                resultDiv.innerHTML = CrashEventsPanel._renderPlaybook(resp.analysis, resp.analysis.analyzed_at, appId, eventId);
                 if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ph ph-brain"></i> Re-Analyze'; }
             } else {
                 const errMsg = resp.analysis ? resp.analysis.error : 'Unknown error';
@@ -745,3 +965,70 @@ const CrashEventsPanel = {
 };
 
 Components.CrashEventsPanel = CrashEventsPanel;
+
+
+// ============================================================================
+// Recovery History Panel
+// ============================================================================
+
+const RecoveryHistoryPanel = {
+    render(actions) {
+        if (!actions || actions.length === 0) return '';
+
+        const rows = actions.map(a => {
+            const statusColor = a.status === 'executed' ? 'var(--color-success)' : 'var(--color-error)';
+            const statusIcon  = a.status === 'executed' ? 'ph-check-circle' : 'ph-x-circle';
+            return `
+            <tr style="border-bottom: 1px solid var(--color-border);">
+                <td style="padding: var(--space-sm) var(--space-md);">
+                    <span style="display:inline-flex; align-items:center; gap:4px; font-size: var(--font-size-xs); color:${statusColor};">
+                        <i class="ph-fill ${statusIcon}"></i> ${a.status}
+                    </span>
+                </td>
+                <td style="padding: var(--space-sm) var(--space-md); font-family: var(--font-family-mono); font-size: var(--font-size-xs); color: var(--color-text-secondary);">
+                    ${Utils.dom.escapeHTML(a.container_name)}
+                </td>
+                <td style="padding: var(--space-sm) var(--space-md); font-size: var(--font-size-xs); color: var(--color-text-secondary);">
+                    ${Utils.date.formatDateTime(a.requested_at)}
+                </td>
+                <td style="padding: var(--space-sm) var(--space-md); font-size: var(--font-size-xs); color: var(--color-text-secondary);">
+                    ${Utils.dom.escapeHTML(a.requested_by)}
+                </td>
+                <td style="padding: var(--space-sm) var(--space-md); font-size: var(--font-size-xs); color: var(--color-text-tertiary); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                    title="${Utils.dom.escapeHTML(a.result_message || '')}">
+                    ${Utils.dom.escapeHTML(a.result_message || '—')}
+                </td>
+            </tr>`;
+        }).join('');
+
+        return `
+        <div id="recovery-history-panel" class="card" style="margin-top: var(--space-xl);">
+            <div class="card-header">
+                <h4 class="card-title" style="color: #d97706;">
+                    <i class="ph ph-arrow-counter-clockwise"></i> Recovery Actions
+                </h4>
+                <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary);">Restart audit log</span>
+            </div>
+            <div class="card-body" style="padding: 0;">
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size: var(--font-size-sm);">
+                        <thead>
+                            <tr style="border-bottom: 2px solid var(--color-border);">
+                                <th style="text-align:left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Status</th>
+                                <th style="text-align:left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Container</th>
+                                <th style="text-align:left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">When</th>
+                                <th style="text-align:left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">By</th>
+                                <th style="text-align:left; padding: var(--space-sm) var(--space-md); color: var(--color-text-secondary); font-weight: var(--font-weight-medium);">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>`;
+    }
+};
+
+Components.RecoveryHistoryPanel = RecoveryHistoryPanel;

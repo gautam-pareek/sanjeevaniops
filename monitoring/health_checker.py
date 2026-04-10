@@ -221,6 +221,14 @@ class HealthChecker:
 
             # Status code check
             if resp.status_code >= 400:
+                # Detect broken redirect chains (e.g. 302 → typo URL → 404)
+                if resp.history:
+                    redirect_codes = " → ".join(str(r.status_code) for r in resp.history)
+                    final_url = resp.url
+                    return SubCheckResult(
+                        name="Endpoint", passed=False,
+                        message=f"{url} → {redirect_codes} → {final_url} → {resp.status_code} (broken redirect)"
+                    )
                 return SubCheckResult(name="Endpoint", passed=False,
                                       message=f"{url} → {resp.status_code}")
 
