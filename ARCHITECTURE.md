@@ -85,8 +85,10 @@
 #### Architecture
 - `ai_engine/ai_service.py` — Ollama HTTP client; `model` field is mutable at runtime
 - Default model: set via `OLLAMA_MODEL` env var or `settings.ollama_model` in `backend/core/config.py`
+- **Auto-model detection**: `is_available()` first tries the configured model; if not found but Ollama is running with other models, it automatically selects the first available model. This means any user with any Ollama model gets AI features immediately — no config editing required.
 - **Runtime model switching**: `GET /ai/models` returns all locally installed models; `POST /ai/model` changes the active model in-process — no restart needed
-- Dashboard AI Engine tab queries `/ai/models` on load and renders a dropdown selector; changing it calls `/ai/model`
+- Dashboard AI Engine tab queries `/ai/models` on load and renders a dropdown selector when multiple models are installed; changing it calls `/ai/model`
+- **Live status polling**: AI Engine page polls `/ai/status` every 20 seconds and updates the Engine badge and offline banner in-place — status reflects reality even if Ollama is stopped or started while the page is open
 
 #### Crash Analysis — What Is Deterministic vs AI
 
@@ -98,7 +100,7 @@
 | `playbook_steps` | Deterministic — mapped from sub-check failure patterns |
 | `files_to_check` | Deterministic — mapped from failure type |
 | `diagnostic_commands` | Deterministic — always docker logs + inspect + stats |
-| `fix_steps` | AI — structured JSON from phi3:mini |
+| `fix_steps` | AI — structured JSON from active Ollama model |
 | `commands` | AI (or falls back to diagnostic_commands) |
 | `quick_check` | AI |
 

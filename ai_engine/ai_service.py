@@ -87,19 +87,36 @@ class AIService:
         self._resolved_model = None  # Actual tag from Ollama (set by is_available)
 
     def is_available(self) -> bool:
-        """Check if Ollama is running and the configured model is available."""
+        """Check if Ollama is running and a usable model is available.
+
+        If the configured model is not installed but Ollama is running with
+        other models, auto-selects the first available model so the tool works
+        out of the box on any machine regardless of which model was pulled.
+        """
         try:
             r = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if r.status_code != 200:
                 return False
             models = [m["name"] for m in r.json().get("models", [])]
-            # Find the exact model tag that matches our configured prefix
+            if not models:
+                return False
+
+            # Try to find the configured model (exact, prefix, or base name match)
             config_base = self.model.split(":")[0]
             for m in models:
                 if m == self.model or m.startswith(self.model) or config_base in m:
                     self._resolved_model = m
                     return True
-            return False
+
+            # Configured model not installed — auto-select first available model
+            # so users with any Ollama model can use the tool immediately
+            logger.info(
+                "Configured model '%s' not found locally. Auto-selecting '%s'.",
+                self.model, models[0],
+            )
+            self.model = models[0]
+            self._resolved_model = models[0]
+            return True
         except Exception:
             return False
 

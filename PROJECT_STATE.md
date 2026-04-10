@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-04-10 (Session 6)
+Last updated: 2026-04-10 (Session 7)
 
 ---
 
@@ -105,6 +105,11 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | Continue in Chat missing playbook context | Chat context now includes playbook steps, files, severity — AI reasons from full evidence |
 | AI Engine page silent when Ollama offline | Yellow offline banner added with `ollama serve` instructions |
 | Recovery policy never executed | `_maybe_auto_restart()` added to `monitor_service` — fires after unhealthy transition, respects backoff + max attempts |
+| AI Engine status badge stuck on "Online" after Ollama stops | AI Engine page now polls `/ai/status` every 20 s; updates badge and offline banner in-place without page reload |
+| "Analyze with AI" button misleading when AI offline | Button label changes to "Analyze (No AI)" / "Re-Analyze (No AI)" when Ollama unavailable; tooltip explains deterministic-only mode |
+| Engine shows Offline when user has a different Ollama model | `is_available()` now auto-selects first locally installed model when configured model not found — any Ollama model works immediately |
+| Offline banner hardcoded `ollama pull phi3:mini` | Banner now shows generic examples (`phi3:mini`, `llama3.2:1b`) — not tied to configured default |
+| App detail view unaware of AI status | `renderApplicationDetailView` now fetches AI status and passes `aiAvailable` flag to `CrashEventsPanel` |
 
 ---
 

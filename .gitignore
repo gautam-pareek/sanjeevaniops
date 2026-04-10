@@ -13,3 +13,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Screenshots / local test assets
+SS/

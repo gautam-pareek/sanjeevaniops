@@ -412,13 +412,15 @@ async function renderApplicationDetailView(appId) {
         showLoading(true);
 
         // Fetch app data and health status in parallel
-        const [app, healthStatus, healthHistory, crashEvents, recoveryActions] = await Promise.all([
+        const [app, healthStatus, healthHistory, crashEvents, recoveryActions, aiStatusResult] = await Promise.all([
             API.applications.get(appId),
             API.health.getStatus(appId).catch(() => null),
             API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] })),
             API.health.getCrashEvents(appId).catch(() => ({ events: [] })),
-            API.health.getRecoveryActions(appId).catch(() => ({ actions: [] }))
+            API.health.getRecoveryActions(appId).catch(() => ({ actions: [] })),
+            API.health.getAIStatus().catch(() => ({ available: false }))
         ]);
+        const aiAvailable = aiStatusResult.available;
         AppState.currentApp = app;
 
         const statusClass = app.status === 'active' ? 'badge-active' : 'badge-inactive';
@@ -575,7 +577,7 @@ async function renderApplicationDetailView(appId) {
                 </div>
             </div>
 
-            <div id="crash-events-panel-wrapper">${Components.CrashEventsPanel.render(crashEvents.events, app.app_id)}</div>
+            <div id="crash-events-panel-wrapper">${Components.CrashEventsPanel.render(crashEvents.events, app.app_id, aiAvailable)}</div>
             <div id="recovery-history-panel-wrapper">${Components.RecoveryHistoryPanel.render(recoveryActions.actions || [])}</div>
 
             <div style="margin-top: var(--space-xl);">
@@ -1068,8 +1070,8 @@ async function renderAIEngineView() {
                 </div>
                 <div style="display: flex; gap: var(--space-md); flex-wrap: wrap; align-items: center; margin-top: var(--space-md);">
                     <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
-                        <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
-                        <span style="font-size: 11px; font-weight: 600;">Engine: ${statusText}</span>
+                        <span id="ai-engine-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
+                        <span id="ai-engine-status-text" style="font-size: 11px; font-weight: 600;">Engine: ${statusText}</span>
                     </div>
                     <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 8px 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
                         <i class="ph ph-cpu" style="font-size: 14px;"></i>
@@ -1088,22 +1090,23 @@ async function renderAIEngineView() {
             </div>
         </div>
 
-        ${!aiStatus.available ? `
-        <!-- AI Offline Banner -->
-        <div style="border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--space-md) var(--space-lg); margin-bottom: var(--space-xl); background: rgba(234,179,8,0.08); display: flex; align-items: flex-start; gap: var(--space-md);">
+        <!-- AI Offline Banner (hidden when online) -->
+        <div id="ai-engine-offline-banner" style="border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--space-md) var(--space-lg); margin-bottom: var(--space-xl); background: rgba(234,179,8,0.08); display: ${!aiStatus.available ? 'flex' : 'none'}; align-items: flex-start; gap: var(--space-md);">
             <i class="ph ph-warning-circle" style="font-size: 24px; color: var(--color-warning); flex-shrink: 0; margin-top: 2px;"></i>
             <div>
                 <div style="font-weight: 700; color: var(--color-warning); margin-bottom: 4px;">AI Engine Offline</div>
                 <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.6;">
                     Ollama is not running. AI-enhanced root-cause analysis and fix suggestions are unavailable.<br>
                     Start it with: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama serve</code>
-                    ${aiStatus.model ? `&nbsp;then pull your model: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull ${aiStatus.model}</code>` : '&nbsp;then pull a model of your choice (e.g. <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull phi3:mini</code>)'}
+                    &nbsp;then pull any model you prefer, e.g.
+                    <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull phi3:mini</code>
+                    or <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull llama3.2:1b</code>
                 </div>
                 <div style="margin-top: 8px; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
                     The recovery playbook (deterministic analysis) will still work — only the AI narrative fix steps require Ollama.
                 </div>
             </div>
-        </div>` : ''}
+        </div>
 
         <!-- Metrics Cards Row -->
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-lg); margin-bottom: var(--space-xl);">
@@ -1249,6 +1252,25 @@ async function renderAIEngineView() {
             }
         });
     }
+
+    // Poll AI status every 20 seconds and update badge + offline banner in-place
+    if (AppState._aiStatusInterval) clearInterval(AppState._aiStatusInterval);
+    AppState._aiStatusInterval = setInterval(async () => {
+        if (AppState.currentRoute !== 'ai-engine') {
+            clearInterval(AppState._aiStatusInterval);
+            AppState._aiStatusInterval = null;
+            return;
+        }
+        try {
+            const status = await API.health.getAIStatus();
+            const dot = document.getElementById('ai-engine-status-dot');
+            const txt = document.getElementById('ai-engine-status-text');
+            const banner = document.getElementById('ai-engine-offline-banner');
+            if (dot) dot.style.background = status.available ? 'var(--color-success)' : 'var(--color-error)';
+            if (txt) txt.textContent = `Engine: ${status.available ? 'Online' : 'Offline'}`;
+            if (banner) banner.style.display = status.available ? 'none' : 'flex';
+        } catch (_) {}
+    }, 20000);
 
     // Check if we have crash context from "Continue in Chat" button
     const _checkChatContext = () => {

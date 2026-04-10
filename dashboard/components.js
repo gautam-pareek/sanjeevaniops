@@ -598,7 +598,7 @@ Components.HealthHistoryTable = HealthHistoryTable;
 console.log('Health components loaded');
 
 const CrashEventsPanel = {
-    render(events, appId) {
+    render(events, appId, aiAvailable = true) {
         if (!events || events.length === 0) return `
         <div id="crash-events-panel" class="card" style="margin-top: var(--space-xl);">
             <div class="card-header">
@@ -619,15 +619,18 @@ const CrashEventsPanel = {
                 <h4 class="card-title" style="color: var(--color-error);">
                     <i class="ph ph-warning-octagon"></i> Crash Events
                 </h4>
-                <span style="font-size: var(--font-size-sm); color: var(--color-text-tertiary);">${events.length} event(s) captured</span>
+                <div style="display:flex; align-items:center; gap: var(--space-sm);">
+                    ${!aiAvailable ? `<span style="font-size: var(--font-size-xs); color: var(--color-warning);"><i class="ph ph-warning-circle"></i> AI offline</span>` : ''}
+                    <span style="font-size: var(--font-size-sm); color: var(--color-text-tertiary);">${events.length} event(s) captured</span>
+                </div>
             </div>
             <div class="card-body">
-                ${events.map(e => CrashEventsPanel._renderEvent(e, appId)).join('')}
+                ${events.map(e => CrashEventsPanel._renderEvent(e, appId, aiAvailable)).join('')}
             </div>
         </div>`;
     },
 
-    _renderEvent(e, appId) {
+    _renderEvent(e, appId, aiAvailable = true) {
         const logPreview = e.container_logs
             ? Utils.dom.escapeHTML(e.container_logs.slice(-2000))
             : null;
@@ -643,11 +646,14 @@ const CrashEventsPanel = {
             }
         }
 
-        const analyzeBtnLabel = e.ai_analysis ? 'Re-Analyze' : 'Analyze with AI';
+        const analyzeBtnLabel = e.ai_analysis
+            ? (aiAvailable ? 'Re-Analyze' : 'Re-Analyze (No AI)')
+            : (aiAvailable ? 'Analyze with AI' : 'Analyze (No AI)');
         const analyzeBtn = `<button
                 class="btn btn-secondary"
                 id="ai-btn-${e.event_id}"
                 style="font-size: var(--font-size-xs); padding: 4px 12px;"
+                title="${aiAvailable ? '' : 'Ollama offline — runs deterministic analysis only'}"
                 onclick="CrashEventsPanel.analyzeEvent('${appId}', '${e.event_id}')">
                 <i class="ph ph-brain"></i> ${analyzeBtnLabel}
               </button>`;
