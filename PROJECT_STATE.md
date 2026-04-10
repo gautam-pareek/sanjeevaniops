@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-04-10 (Session 5)
+Last updated: 2026-04-10 (Session 6)
 
 ---
 
@@ -55,7 +55,8 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 - **AI Operations Center**: Dedicated dashboard tab with metrics cards, severity distribution bars, failure category breakdown, batch analysis with progress bar
 - **Scoped AI Chat**: Chat assistant that only answers DevOps/container/monitoring questions; politely refuses unrelated queries
 - **AI Status endpoint**: `GET /ai/status` — checks Ollama availability and model status
-- Endpoints: `POST /{event_id}/analyze`, `GET /ai/status`, `POST /ai/chat`
+- **Dynamic model selection**: `GET /ai/models` returns all locally installed Ollama models; `POST /ai/model` switches the active model at runtime — no server restart or config edit needed. Dashboard AI Engine tab shows a dropdown with all installed models.
+- Endpoints: `POST /{event_id}/analyze`, `GET /ai/status`, `GET /ai/models`, `POST /ai/model`, `POST /ai/chat`
 
 ### Feature 6: Recovery Actions ✅
 - **Deterministic Recovery Playbook**: Built from sub-check failure patterns with zero AI involvement — identifies root cause pattern (404, 5xx, body keywords, crash-loop, slow response, bad JSON, broken redirect) and maps to numbered fix steps + files to inspect
@@ -139,11 +140,11 @@ All planned features are complete. The project is in verification/testing phase.
 
 | Setting | Value |
 |---------|-------|
-| Model | `phi3:mini` |
-| Size | ~2.3GB |
-| VRAM | Fits in 4GB |
-| Config | `backend/core/config.py` → `ollama_model` |
-| Fallback | Change `ollama_model` in config — no code changes needed |
+| Default model | `phi3:mini` (override via `OLLAMA_MODEL` env var) |
+| Runtime selection | Dashboard AI Engine tab — dropdown shows all installed models, switch with one click |
+| List installed | `ollama list` or `GET /api/v1/applications/ai/models` |
+| Small options | `llama3.2:1b` (1.3 GB), `gemma2:2b` (1.6 GB), `phi3:mini` (2.3 GB) |
+| Config | `backend/core/config.py` → `ollama_model` (startup default only) |
 
 ---
 
@@ -160,4 +161,4 @@ apscheduler>=3.10.4
 requests>=2.31.0
 ```
 
-External: Ollama (must be installed separately with `ollama pull phi3:mini`)
+External: Ollama (must be installed separately — pull any model with `ollama pull <model>`)

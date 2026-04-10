@@ -20,8 +20,9 @@
 │                     FastAPI Backend                          │
 │                  (localhost:8000)                            │
 │  /api/v1/applications    /health    /crash-events            │
-│  /ai/status    /ai/chat    /{event_id}/analyze               │
-│  /{event_id}/restart    /{app_id}/recovery-actions           │
+│  /ai/status    /ai/models    /ai/model    /ai/chat            │
+│  /{event_id}/analyze    /{event_id}/restart                  │
+│  /{app_id}/recovery-actions                                  │
 └──────┬───────────────────────────────┬───────────────────────┘
        │                               │
 ┌──────▼──────────┐          ┌─────────▼──────────┐
@@ -39,13 +40,14 @@
                               │  container status   │
 ┌─────────────────────────────┤  container logs     │
 │  AI Engine                  │  restart count      │
-│  Ollama + phi3:mini         └────────────────────┘
+│  Ollama — any local model   └────────────────────┘
 │  - Deterministic playbook
 │  - Structured fix steps
 │  - Root cause + severity
 │  - Scoped DevOps chat
 │  - Batch analysis
 │  - Continue in Chat
+│  - Runtime model switching
 │  Local only, no API keys
 └─────────────────────────────┘
 ```
@@ -81,9 +83,10 @@
 ### AI Engine
 
 #### Architecture
-- `ai_engine/ai_service.py` — Ollama HTTP client
-- Model: `phi3:mini` (~2.3GB, fits in 4GB VRAM)
-- Model is configurable via `settings.ollama_model` in `backend/core/config.py`
+- `ai_engine/ai_service.py` — Ollama HTTP client; `model` field is mutable at runtime
+- Default model: set via `OLLAMA_MODEL` env var or `settings.ollama_model` in `backend/core/config.py`
+- **Runtime model switching**: `GET /ai/models` returns all locally installed models; `POST /ai/model` changes the active model in-process — no restart needed
+- Dashboard AI Engine tab queries `/ai/models` on load and renders a dropdown selector; changing it calls `/ai/model`
 
 #### Crash Analysis — What Is Deterministic vs AI
 

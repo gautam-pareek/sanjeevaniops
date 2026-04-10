@@ -8,7 +8,7 @@ Named after the *Sanjeevani* herb from Hindu mythology — the herb that revives
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-SDK-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Ollama](https://img.shields.io/badge/AI-Ollama%20phi3%3Amini-black?style=flat-square)
+![Ollama](https://img.shields.io/badge/AI-Ollama%20local%20models-black?style=flat-square)
 ![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
@@ -59,7 +59,7 @@ SanjeevaniOps monitors your local Docker containers, detects failures the moment
 | Container Integration | Docker SDK |
 | Health Scheduler | APScheduler |
 | Frontend | Vanilla HTML/CSS/JS (zero build step) |
-| AI Engine | Ollama — phi3:mini (~2.3GB, fits in 4GB VRAM) |
+| AI Engine | Ollama — any locally installed model, selectable from dashboard |
 
 ---
 
@@ -84,9 +84,13 @@ pip install -r requirements.txt
 Download and install Ollama from [https://ollama.com/download](https://ollama.com/download)
 
 ```bash
-# Pull the AI model (~2.3GB download, fits in 4GB VRAM)
-ollama pull phi3:mini
+# Pull any model that fits your hardware — examples:
+ollama pull phi3:mini       # 2.3 GB — good for 4 GB VRAM
+ollama pull llama3.2:1b     # 1.3 GB — smallest, fastest
+ollama pull gemma2:2b       # 1.6 GB — alternative small model
 ```
+
+Run `ollama list` to see what you already have. The dashboard's **AI Engine** tab shows all installed models and lets you switch between them at runtime — no config file editing needed.
 
 ### Step 3: Build Test Sites (Optional — for Demo)
 
@@ -232,6 +236,8 @@ Click **"Continue in Chat"** after an analysis to jump to the AI Engine tab. The
 |--------|----------|-------------|
 | `POST` | `/api/v1/applications/{app_id}/crash-events/{event_id}/analyze` | Analyze crash event |
 | `GET` | `/api/v1/applications/ai/status` | Check Ollama availability |
+| `GET` | `/api/v1/applications/ai/models` | List locally installed Ollama models |
+| `POST` | `/api/v1/applications/ai/model` | Switch active model at runtime |
 | `POST` | `/api/v1/applications/ai/chat` | Scoped AI chat assistant |
 
 ### Recovery Actions
@@ -274,6 +280,7 @@ Broken redirect chains (e.g. 302 → 404) are recorded with the full hop sequenc
 The **AI Engine** tab in the dashboard provides:
 
 - **Engine status** — Ollama online/offline, model info
+- **Model selector** — dropdown lists every locally installed Ollama model; switch with one click, takes effect immediately (no restart needed)
 - **Aggregate metrics** — total crash events, analyses complete, pending, critical/high count
 - **Severity distribution** and failure category breakdown
 - **Batch Analysis** — analyze all unanalyzed crash events with one click and progress tracking
@@ -358,7 +365,7 @@ apscheduler>=3.10.4
 requests>=2.31.0
 ```
 
-External: **Ollama** (installed separately — `ollama pull phi3:mini`)
+External: **Ollama** (installed separately — pull any model with `ollama pull <model>`)
 
 ---
 
