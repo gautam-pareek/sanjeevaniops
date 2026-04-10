@@ -44,6 +44,8 @@ SanjeevaniOps monitors your local Docker containers, detects failures the moment
 | Recovery Playbook | ✅ Complete | Deterministic step-by-step fix guide from sub-check failure patterns |
 | AI Operations Center | ✅ Complete | Dashboard tab: metrics, batch analysis, scoped AI chat |
 | Recovery Actions | ✅ Complete | Human-approved container restart with full audit trail |
+| Auto-Recovery Engine | ✅ Complete | Policy-driven auto-restart with exponential backoff + attempt limiting |
+| Broken Redirect Detection | ✅ Complete | Detects 302→404 chains — playbook routes to nginx.conf, not missing file |
 
 ---
 
@@ -94,7 +96,18 @@ docker run -d --name testsite-container -p 8085:80 testsite
 
 docker build -t testsite2 ./testsite2
 docker run -d --name testsite2-container -p 8086:80 testsite2
+
+docker build -t testsite3 ./testsite3
+docker run -d --name testsite3-container -p 8087:80 testsite3
 ```
+
+The three test sites simulate different failure modes:
+
+| Site | Port | Failure Mode | How Detected |
+|------|------|-------------|--------------|
+| testsite | 8085 | `/settings.html` → 404 | HTTP status code |
+| testsite2 (ShopEasy) | 8086 | `/checkout.html` returns 200 with "500 error" in body | Body keyword scan |
+| testsite3 (DevShop) | 8087 | `/checkout` → 302 → `/chekout.html` (typo) → 404 | Broken redirect chain |
 
 ---
 
@@ -165,11 +178,24 @@ Every analyzed crash event gets a **Recovery Playbook** panel:
 
 ### Recovery Actions
 
-The restart button is amber-coloured and always labelled as **temporary relief only**. A confirmation modal reminds the operator that the crash will recur unless the playbook is applied. Every restart is logged to an audit trail with operator name and timestamp.
+Two recovery paths are available:
+
+**Manual restart** — The restart button is amber-coloured and labelled as **temporary relief only**. A confirmation modal reminds the operator that the crash will recur unless the root cause is fixed. Every restart is logged to an audit trail with operator identity and timestamp.
+
+**Auto-recovery** — When `recovery_policy.enabled = true` on a registered app, the monitoring engine automatically restarts the container after an unhealthy transition using a configurable policy:
+- `restart_delay_seconds` — initial delay before first restart (default: 30s)
+- `backoff_multiplier` — delay multiplier on each subsequent attempt (default: 1.5×)
+- `max_restart_attempts` — cap per failure episode (default: 3)
+
+The attempt counter resets when the app recovers, so a new failure episode gets the full budget again. All auto-restarts are logged as `requested_by = 'auto-recovery'` in the same audit table.
+
+### Broken Redirect Detection
+
+SanjeevaniOps detects broken redirect chains — not just missing files. If a monitored endpoint returns a 302 and the final destination returns 404, the sub-check records the full chain (e.g. `/checkout → 302 → /chekout.html → 404`). The playbook correctly points to the **nginx config**, not to a missing file, because the file path is a symptom of a misconfigured redirect.
 
 ### Continue in Chat
 
-Click **"Continue in Chat"** after an analysis to jump to the AI Engine tab. The crash context is automatically sent to the scoped AI chat assistant for deeper debugging.
+Click **"Continue in Chat"** after an analysis to jump to the AI Engine tab. The crash context — including root cause, severity, recovery playbook steps, and files to inspect — is automatically sent to the scoped AI chat assistant so it can reason from evidence rather than guessing.
 
 ---
 
@@ -236,8 +262,10 @@ Every HTTP check runs 6 sub-checks:
 | Response Time | Slow server (configurable warn/critical thresholds) |
 | Body Keywords | Error pages returning 200 — searches for "error", "exception" etc |
 | Restart Count | Crash-looping container |
-| Additional Endpoints | Specific routes broken — body scanned for errors too |
+| Additional Endpoints | Specific routes broken — body scanned for errors too; redirect chains detected |
 | JSON Validation | Non-JSON response when JSON expected |
+
+Broken redirect chains (e.g. 302 → 404) are recorded with the full hop sequence and routed to a nginx-config playbook, not a file-missing playbook.
 
 ---
 
@@ -297,8 +325,9 @@ sanjeevaniops/
 │   ├── 003_monitoring_pause.sql
 │   ├── 004_crash_events.sql
 │   └── 005_recovery_actions.sql
-├── testsite/
-├── testsite2/
+├── testsite/           ← demo: 404 on /settings.html
+├── testsite2/          ← demo: body keyword failure (200 but "500 error" text)
+├── testsite3/          ← demo: broken redirect /checkout → 302 → /chekout.html → 404
 └── requirements.txt
 ```
 
