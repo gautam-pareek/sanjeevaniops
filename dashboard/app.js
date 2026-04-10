@@ -1094,13 +1094,9 @@ async function renderAIEngineView() {
         <div id="ai-engine-offline-banner" style="border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--space-md) var(--space-lg); margin-bottom: var(--space-xl); background: rgba(234,179,8,0.08); display: ${!aiStatus.available ? 'flex' : 'none'}; align-items: flex-start; gap: var(--space-md);">
             <i class="ph ph-warning-circle" style="font-size: 24px; color: var(--color-warning); flex-shrink: 0; margin-top: 2px;"></i>
             <div>
-                <div style="font-weight: 700; color: var(--color-warning); margin-bottom: 4px;">AI Engine Offline</div>
-                <div style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.6;">
-                    Ollama is not running. AI-enhanced root-cause analysis and fix suggestions are unavailable.<br>
-                    Start it with: <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama serve</code>
-                    &nbsp;then pull any model you prefer, e.g.
-                    <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull phi3:mini</code>
-                    or <code style="background: var(--color-surface-elevated); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px;">ollama pull llama3.2:1b</code>
+                <div style="font-weight: 700; color: var(--color-warning); margin-bottom: 4px;">AI Engine Unavailable</div>
+                <div id="ai-engine-offline-msg" style="font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.6;">
+                    ${Utils.dom.escapeHTML(aiStatus.message)}
                 </div>
                 <div style="margin-top: 8px; font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
                     The recovery playbook (deterministic analysis) will still work — only the AI narrative fix steps require Ollama.
@@ -1266,9 +1262,11 @@ async function renderAIEngineView() {
             const dot = document.getElementById('ai-engine-status-dot');
             const txt = document.getElementById('ai-engine-status-text');
             const banner = document.getElementById('ai-engine-offline-banner');
+            const bannerMsg = document.getElementById('ai-engine-offline-msg');
             if (dot) dot.style.background = status.available ? 'var(--color-success)' : 'var(--color-error)';
             if (txt) txt.textContent = `Engine: ${status.available ? 'Online' : 'Offline'}`;
             if (banner) banner.style.display = status.available ? 'none' : 'flex';
+            if (bannerMsg && status.message) bannerMsg.textContent = status.message;
         } catch (_) {}
     }, 20000);
 

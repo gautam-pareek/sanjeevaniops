@@ -775,18 +775,26 @@ def get_ai_status():
     from ai_engine.ai_service import ai_service
 
     available = ai_service.is_available()
+    installed = ai_service.list_installed_models()
+
     if available:
         message = f"AI engine ready — using model '{ai_service.model}'"
-    else:
+    elif installed:
+        # Ollama is running but the configured model isn't installed
         message = (
-            "Ollama is not running. Start it with: ollama serve  "
-            "then pull any model, e.g. ollama pull phi3:mini"
+            f"Model '{ai_service.model}' not found. "
+            f"Installed: {', '.join(installed)}. "
+            f"Switch in the AI Engine tab or run: ollama pull {ai_service.model}"
         )
+    else:
+        message = "Ollama is not running. Start it with: ollama serve"
+
     return {
         "available": available,
         "model": ai_service.model,
         "ollama_url": ai_service.base_url,
         "message": message,
+        "installed_models": installed,
     }
 
 
