@@ -1075,7 +1075,7 @@ async function renderAIEngineView() {
                     </div>
                     <div style="display: flex; align-items: center; gap: var(--space-sm); border: 1px solid rgba(255,255,255,0.4); padding: 4px 8px 4px 12px; border-radius: var(--radius-full); white-space: nowrap;">
                         <i class="ph ph-cpu" style="font-size: 14px;"></i>
-                        ${aiModels.models.length > 1
+                        ${aiModels.models.length >= 1
                             ? `<select id="ai-model-select" style="background: transparent; border: none; color: white; font-size: 11px; font-weight: 600; cursor: pointer; outline: none; max-width: 180px;">
                                 ${aiModels.models.map(m => `<option value="${m}" style="background: var(--color-primary); color: white;" ${m === (aiModels.active_model || aiStatus.model) ? 'selected' : ''}>${m}</option>`).join('')}
                                </select>`
