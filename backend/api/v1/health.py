@@ -822,6 +822,25 @@ class AIModelSelectRequest(BaseModel):
     model: str
 
 
+def _persist_model_to_env(model: str) -> None:
+    """Write OLLAMA_MODEL=<model> to the project .env so the selection survives restarts."""
+    from pathlib import Path
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith("OLLAMA_MODEL="):
+            lines[i] = f"OLLAMA_MODEL={model}"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"OLLAMA_MODEL={model}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 @router.post(
     "/ai/model",
     summary="Switch the active AI model",
@@ -836,6 +855,7 @@ def set_ai_model(body: AIModelSelectRequest):
 
     ai_service.model = body.model.strip()
     ai_service._resolved_model = None  # force re-resolve on next is_available()
+    _persist_model_to_env(ai_service.model)  # persist so selection survives restarts
     available = ai_service.is_available()
     return {
         "success": True,
