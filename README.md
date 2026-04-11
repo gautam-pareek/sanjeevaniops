@@ -92,7 +92,7 @@ ollama pull gemma2:2b       # 1.6 GB — alternative small model
 
 Run `ollama list` to see what you already have. The dashboard's **AI Engine** tab shows all installed models and lets you switch between them at runtime — no config file editing needed.
 
-> **Any model works.** If the default model (`phi3:mini`) is not installed, SanjeevaniOps automatically uses whatever model you have. Install any one model and AI features are available immediately.
+> **Any model works.** When you open the AI Engine tab, SanjeevaniOps automatically switches to the first locally installed model if the default (`phi3:mini`) is not found. Your selection is saved to `.env` and persists across restarts — no config editing needed.
 
 ### Step 3: Build Test Sites (Optional — for Demo)
 

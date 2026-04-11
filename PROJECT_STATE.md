@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-04-10 (Session 8)
+Last updated: 2026-04-11 (Session 9)
 
 ---
 
@@ -115,6 +115,9 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | Ollama OOM/not-found errors shown as raw cryptic strings in chat and analyze | `_friendly_error()` translates known Ollama errors into actionable guidance (switch model, pull model, start Ollama) |
 | Offline banner always said "Ollama is not running" regardless of actual cause | Banner now uses backend message directly — distinguishes: Ollama down vs model not installed vs model found |
 | `/ai/status` could not tell user what models are actually installed | Now returns `installed_models[]` — when configured model missing, message names what IS installed so user knows what to switch to |
+| Model selection lost on backend restart — engine shows offline every time | `_persist_model_to_env()` writes `OLLAMA_MODEL=<model>` to `.env` on every `POST /ai/model`; pydantic-settings reads it on next startup |
+| Model dropdown hidden when only 1 model installed — no way to switch to it | Changed condition from `> 1` to `>= 1` so dropdown renders with any number of installed models |
+| Engine stays offline on first visit even when installed model is in the list | AI Engine page now auto-calls `setAIModel` on load if configured model is not in installed list — silently switches to first available model |
 
 ---
 
