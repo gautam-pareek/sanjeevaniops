@@ -1232,7 +1232,7 @@ async function renderAIEngineView() {
         </style>
     `;
 
-    // Wire up model selector if multiple models are available
+    // Wire up model selector
     const modelSelect = document.getElementById('ai-model-select');
     if (modelSelect) {
         modelSelect.addEventListener('change', async () => {
@@ -1247,6 +1247,15 @@ async function renderAIEngineView() {
                 showToast('Failed to switch model', 'error');
             }
         });
+
+        // Auto-switch if the configured model isn't installed but another one is
+        const activeModel = aiModels.active_model || aiStatus.model;
+        if (!aiModels.models.includes(activeModel) && modelSelect.value) {
+            try {
+                await API.health.setAIModel(modelSelect.value);
+                showToast(`Auto-switched to ${modelSelect.value}`, 'success');
+            } catch (err) { /* silent */ }
+        }
     }
 
     // Poll AI status every 20 seconds and update badge + offline banner in-place
