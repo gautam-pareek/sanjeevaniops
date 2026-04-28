@@ -14,13 +14,14 @@ import json
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from backend.core.database import db
 from backend.repositories.health_repository import HealthRepository
 from backend.repositories.application_repository import ApplicationRepository
 from backend.repositories.recovery_repository import RecoveryRepository
-from backend.services.docker_service import DockerService
+from backend.repositories.discovery_repository import DiscoveryRepository
+from backend.services.docker_service import DockerService, _parse_image_version
 from monitoring.health_checker import HealthChecker, CheckResult
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class MonitorService:
         self._health_repo = HealthRepository()
         self._app_repo = ApplicationRepository()
         self._recovery_repo = RecoveryRepository()
+        self._discovery_repo = DiscoveryRepository()
         self._docker = DockerService()
 
     # ------------------------------------------------------------------
@@ -119,16 +121,23 @@ class MonitorService:
                     last_result_id=result_id,
                     first_failure_at=first_failure_at,
                 )
-                # Capture crash event only on first transition to unhealthy
-                if prev_status != "unhealthy":
+                # Capture crash event on first transition to unhealthy,
+                # OR if already unhealthy but all previous events have been
+                # deleted by the retention window (container still down but
+                # no logs visible in the dashboard).
+                if prev_status != "unhealthy" or not self._health_repo.has_crash_events(conn, app_id):
                     self._capture_crash_event(conn, app_id, container_name, result_id)
                 return
+
+            # Fetch discovered endpoints to include alongside manual ones
+            discovered_urls = self._discovery_repo.get_active_endpoints(conn, app_id)
 
             # Execute check
             result: CheckResult = self._checker.run_check(
                 check_type=check_type,
                 config=inner_config,
                 container_name=container_name,
+                extra_endpoints=discovered_urls,
             )
 
             # Persist result
@@ -191,16 +200,27 @@ class MonitorService:
                 first_failure_at=first_failure_at,
             )
 
-            # Capture crash event if status just flipped to unhealthy
+            # Capture crash event if status just flipped to unhealthy,
+            # OR if it's persistently unhealthy but the previous event was
+            # deleted by the retention window (so the dashboard shows nothing).
             previous_status = current_status_row["current_status"] if current_status_row else "unknown"
             if new_status == "unhealthy" and previous_status != "unhealthy":
                 event_id = self._capture_crash_event(conn, app_id, container_name, result_id)
                 # Trigger auto-recovery if the app's policy enables it
                 self._maybe_auto_restart(app, container_name, event_id, first_failure_at)
             elif new_status == "unhealthy":
-                # Already unhealthy — check if a scheduled restart is still warranted
-                # (e.g. first auto-restart didn't bring it back)
-                self._maybe_auto_restart(app, container_name, None, first_failure_at)
+                # Already unhealthy — re-capture logs if no events remain visible
+                # (covers: events aged out after 24 h, or app was already down
+                #  when monitoring started and the original event was purged)
+                if not self._health_repo.has_crash_events(conn, app_id):
+                    event_id = self._capture_crash_event(conn, app_id, container_name, result_id)
+                    self._maybe_auto_restart(app, container_name, event_id, first_failure_at)
+                else:
+                    # Already unhealthy and events exist — check if a restart is still warranted
+                    self._maybe_auto_restart(app, container_name, None, first_failure_at)
+
+            # Version auto-update: detect Docker image change and app version change
+            self._maybe_update_versions(conn, app, container_info, result)
 
             self._log_outcome(app_id, container_name, result, new_status, consecutive_failures)
 
@@ -353,6 +373,47 @@ class MonitorService:
         t = threading.Timer(delay, _do_restart)
         t.daemon = True
         t.start()
+
+    def _maybe_update_versions(
+        self,
+        conn,
+        app: Dict[str, Any],
+        container_info: Optional[Dict[str, Any]],
+        result: CheckResult,
+    ) -> None:
+        """
+        Silently update docker_image_version and app_version when they change.
+        Never raises — version tracking must not interrupt health check flow.
+        """
+        try:
+            app_id = app["app_id"]
+            updates: Dict[str, str] = {}
+
+            # Docker image version
+            if container_info:
+                current_docker_ver = _parse_image_version(container_info.get("image", ""))
+                stored_docker_ver = app.get("docker_image_version")
+                if current_docker_ver and current_docker_ver != stored_docker_ver:
+                    updates["docker_image_version"] = current_docker_ver
+                    logger.info(
+                        "[VERSION] app=%s docker image: %s → %s",
+                        app_id, stored_docker_ver, current_docker_ver,
+                    )
+
+            # App version from /version endpoint
+            if result.version_string is not None:
+                stored_app_ver = app.get("app_version")
+                if result.version_string != stored_app_ver:
+                    updates["app_version"] = result.version_string
+                    logger.info(
+                        "[VERSION] app=%s app version: %s → %s",
+                        app_id, stored_app_ver, result.version_string,
+                    )
+
+            if updates:
+                self._app_repo.update_version_info(conn, app_id, **updates)
+        except Exception as exc:
+            logger.warning("[VERSION] update failed app=%s error=%s", app["app_id"], exc)
 
     def _log_outcome(
         self,

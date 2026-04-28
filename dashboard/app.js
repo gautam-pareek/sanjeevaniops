@@ -412,13 +412,14 @@ async function renderApplicationDetailView(appId) {
         showLoading(true);
 
         // Fetch app data and health status in parallel
-        const [app, healthStatus, healthHistory, crashEvents, recoveryActions, aiStatusResult] = await Promise.all([
+        const [app, healthStatus, healthHistory, crashEvents, recoveryActions, aiStatusResult, discoveredData] = await Promise.all([
             API.applications.get(appId),
             API.health.getStatus(appId).catch(() => null),
             API.health.getHistory(appId, { limit: 20 }).catch(() => ({ results: [] })),
             API.health.getCrashEvents(appId).catch(() => ({ events: [] })),
             API.health.getRecoveryActions(appId).catch(() => ({ actions: [] })),
-            API.health.getAIStatus().catch(() => ({ available: false }))
+            API.health.getAIStatus().catch(() => ({ available: false })),
+            API.discovery.listEndpoints(appId).catch(() => ({ endpoints: [] }))
         ]);
         const aiAvailable = aiStatusResult.available;
         AppState.currentApp = app;
@@ -483,6 +484,14 @@ async function renderApplicationDetailView(appId) {
                                 ${Utils.date.formatDateTime(app.registration_info?.last_updated_at)}
                             </p>
                         </div>
+                        ${(app.docker_image_version || app.app_version) ? `
+                        <div>
+                            <label class="text-muted" style="font-size: var(--font-size-sm);">Versions</label>
+                            <div style="margin-top: var(--space-xs);">
+                                ${Components.VersionBadges.render(app)}
+                            </div>
+                        </div>
+                        ` : ''}
                     </div>
                 </div>
                 <div class="card-footer">
@@ -579,6 +588,10 @@ async function renderApplicationDetailView(appId) {
 
             <div id="crash-events-panel-wrapper">${Components.CrashEventsPanel.render(crashEvents.events, app.app_id, aiAvailable)}</div>
             <div id="recovery-history-panel-wrapper">${Components.RecoveryHistoryPanel.render(recoveryActions.actions || [])}</div>
+
+            ${app.health_check?.type === 'http'
+                ? Components.DiscoveredEndpointsPanel.render(app.app_id, discoveredData.endpoints || [])
+                : ''}
 
             <div style="margin-top: var(--space-xl);">
                 <button class="btn btn-primary" onclick="handleViewHistory('${app.app_id}')">
@@ -1012,6 +1025,9 @@ async function renderAIEngineView() {
     const contentView = document.getElementById('content-view');
     contentView.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div><p>Initializing AI Engine...</p></div>';
 
+    // Snapshot the route so we can guard against stale async renders
+    const routeAtStart = AppState.currentRoute;
+
     // Fetch AI status, available models, and all crash events
     let aiStatus = { available: false, model: '', message: 'Checking...' };
     let aiModels = { available: false, models: [], active_model: '' };
@@ -1050,6 +1066,9 @@ async function renderAIEngineView() {
             if (a.category) categoryCounts[a.category] = (categoryCounts[a.category] || 0) + 1;
         } catch {}
     });
+
+    // If user navigated away while data was loading, abort — don't overwrite the new page
+    if (AppState.currentRoute !== routeAtStart) return;
 
     const statusColor = aiStatus.available ? 'var(--color-success)' : 'var(--color-error)';
     const statusText = aiStatus.available ? 'Online' : 'Offline';
@@ -1281,6 +1300,12 @@ async function renderAIEngineView() {
 
     // Check if we have crash context from "Continue in Chat" button
     const _checkChatContext = () => {
+        // If user navigated away, clean up and stop retrying
+        if (AppState.currentRoute !== 'ai-engine') {
+            sessionStorage.removeItem('aiChatContext');
+            return;
+        }
+
         const stored = sessionStorage.getItem('aiChatContext');
         if (!stored) return;
 

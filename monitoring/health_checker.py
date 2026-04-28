@@ -35,6 +35,7 @@ class CheckResult:
     response_time_ms: Optional[int]
     error_message: Optional[str]
     sub_checks: List[SubCheckResult] = field(default_factory=list)
+    version_string: Optional[str] = None  # from version_endpoint call, if configured
 
 
 class HealthChecker:
@@ -49,9 +50,15 @@ class HealthChecker:
             self._docker_available = False
         self._restart_counts: Dict[str, int] = {}
 
-    def run_check(self, check_type: str, config: Dict[str, Any], container_name: str) -> CheckResult:
+    def run_check(
+        self,
+        check_type: str,
+        config: Dict[str, Any],
+        container_name: str,
+        extra_endpoints: List[str] = [],
+    ) -> CheckResult:
         if check_type == "http":
-            return self._check_http(config, container_name)
+            return self._check_http(config, container_name, extra_endpoints)
         elif check_type == "tcp":
             return self._check_tcp(config)
         elif check_type == "exec":
@@ -63,7 +70,12 @@ class HealthChecker:
 
     # ── HTTP check (enhanced) ─────────────────────────────────────────
 
-    def _check_http(self, config: Dict[str, Any], container_name: str) -> CheckResult:
+    def _check_http(
+        self,
+        config: Dict[str, Any],
+        container_name: str,
+        extra_endpoints: List[str] = [],
+    ) -> CheckResult:
         import logging
         logger = logging.getLogger(__name__)
         logger.debug("_check_http config keys: %s", list(config.keys()))
@@ -84,6 +96,7 @@ class HealthChecker:
         ]
         additional_endpoints = config.get("additional_endpoints") or []
         expect_json = config.get("expect_json", False)
+        version_endpoint = config.get("version_endpoint")
 
         sub_checks: List[SubCheckResult] = []
         overall_status = "healthy"
@@ -174,13 +187,30 @@ class HealthChecker:
         if not rc.passed:
             overall_status = "unhealthy"
 
-        # Check 5: Additional endpoints
+        # Check 5: Additional endpoints (manual, capped at 5)
         for ep in additional_endpoints[:5]:
             ep_url = ep if ep.startswith("http") else f"{url.rstrip('/')}/{ep.lstrip('/')}"
             ep_result = self._check_single_endpoint(ep_url, timeout, error_keywords)
             sub_checks.append(ep_result)
             if not ep_result.passed:
                 overall_status = "unhealthy"
+
+        # Check 5b: Discovered endpoints (auto-crawled, passed in from monitor_service)
+        for ep_url in extra_endpoints:
+            ep_result = self._check_single_endpoint(ep_url, timeout, error_keywords)
+            sub_checks.append(ep_result)
+            if not ep_result.passed:
+                overall_status = "unhealthy"
+
+        # Version endpoint: fetch and parse — never affects health status
+        version_string: Optional[str] = None
+        if version_endpoint:
+            version_url = (
+                version_endpoint
+                if version_endpoint.startswith("http")
+                else f"{url.rstrip('/')}/{version_endpoint.lstrip('/')}"
+            )
+            version_string = self._fetch_version(version_url, timeout)
 
         failed = [sc for sc in sub_checks if not sc.passed]
         error_msg = " | ".join(f"{sc.name}: {sc.message}" for sc in failed[:3]) if failed else None
@@ -190,7 +220,31 @@ class HealthChecker:
             response_time_ms=elapsed_ms,
             error_message=error_msg,
             sub_checks=sub_checks,
+            version_string=version_string,
         )
+
+    def _fetch_version(self, url: str, timeout: int) -> Optional[str]:
+        """
+        Call the version endpoint and return a version string.
+        Accepts plain text or JSON with a 'version' / 'app_version' key.
+        Returns None on any failure — never raises.
+        """
+        try:
+            resp = requests.get(url, timeout=timeout, allow_redirects=True)
+            if resp.status_code >= 400:
+                return None
+            text = resp.text.strip()
+            if not text:
+                return None
+            try:
+                data = json.loads(text)
+                version = data.get("version") or data.get("app_version") or data.get("v")
+                return str(version) if version else None
+            except (json.JSONDecodeError, ValueError):
+                # Plain text — use as-is if it looks like a version string (< 100 chars)
+                return text[:100] if len(text) <= 100 else None
+        except Exception:
+            return None
 
     def _check_restart_count(self, container_name: str) -> SubCheckResult:
         if not self._docker_available or not container_name:

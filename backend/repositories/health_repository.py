@@ -290,6 +290,14 @@ class HealthRepository:
         ).fetchone()
         return row is not None
 
+    def has_crash_events(self, conn, app_id: str) -> bool:
+        """Return True if at least one crash event exists for this app (not yet deleted by retention)."""
+        row = conn.execute(
+            "SELECT 1 FROM crash_events WHERE app_id = ? LIMIT 1",
+            (app_id,)
+        ).fetchone()
+        return row is not None
+
     def delete_old_crash_events(self, conn, retention_minutes: int) -> int:
         """Delete crash events older than retention_minutes. Returns count deleted."""
         cutoff = datetime.now(timezone.utc).timestamp() - (retention_minutes * 60)

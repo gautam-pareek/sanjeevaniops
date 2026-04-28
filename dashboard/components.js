@@ -271,6 +271,12 @@ const HealthCheckDisplay = {
                                 </div>
                             </div>
                         ` : ''}
+                        ${config.version_endpoint ? `
+                            <div style="margin-top: var(--space-md);">
+                                <strong>Version Endpoint:</strong>
+                                <code style="margin-left: var(--space-sm);">${Utils.dom.escapeHTML(config.version_endpoint)}</code>
+                            </div>
+                        ` : ''}
                     </div>
                 `;
             case 'tcp':
@@ -943,7 +949,7 @@ const CrashEventsPanel = {
             }
         }
         sessionStorage.setItem('aiChatContext', JSON.stringify({ crashReason, suggestedFix }));
-        window.location.hash = '#ai-engine';
+        window.location.hash = 'ai-engine';
     },
 
     async analyzeEvent(appId, eventId) {
@@ -1038,3 +1044,165 @@ const RecoveryHistoryPanel = {
 };
 
 Components.RecoveryHistoryPanel = RecoveryHistoryPanel;
+
+
+// ============================================================================
+// Discovered Endpoints Panel
+// ============================================================================
+
+const DiscoveredEndpointsPanel = {
+    /**
+     * Render the discovered endpoints card for the app detail view.
+     * @param {string} appId
+     * @param {Array} endpoints  - from API.discovery.listEndpoints()
+     */
+    render(appId, endpoints) {
+        const active   = (endpoints || []).filter(e => e.status === 'active');
+        const excluded = (endpoints || []).filter(e => e.status === 'excluded');
+
+        return `
+        <div id="discovered-endpoints-panel" class="card" style="margin-top: var(--space-xl);">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <h4 class="card-title">
+                    <i class="ph ph-link"></i> Auto-Discovered Endpoints
+                </h4>
+                <button
+                    class="btn btn-secondary"
+                    style="font-size: var(--font-size-xs); padding: 4px 12px;"
+                    onclick="DiscoveredEndpointsPanel.triggerRecrawl('${appId}')">
+                    <i class="ph ph-magnifying-glass"></i> Re-crawl
+                </button>
+            </div>
+            <div class="card-body">
+                ${endpoints && endpoints.length === 0 ? `
+                    <p style="color: var(--color-text-tertiary); font-size: var(--font-size-sm); margin: 0;">
+                        <i class="ph ph-info"></i> No endpoints discovered yet.
+                        Click <strong>Re-crawl</strong> to scan the base URL, or wait for the next health check cycle.
+                    </p>
+                ` : `
+                    ${active.length > 0 ? `
+                        <div style="margin-bottom: var(--space-md);">
+                            <p style="font-size: var(--font-size-xs); font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-sm);">
+                                <i class="ph-fill ph-check-circle" style="color: var(--color-success);"></i>
+                                Active (${active.length}) — included in health checks
+                            </p>
+                            <div style="display: flex; flex-direction: column; gap: var(--space-xs);">
+                                ${active.map(ep => `
+                                    <div style="display:flex; align-items:center; justify-content:space-between; padding: var(--space-xs) var(--space-sm); background: var(--color-surface-elevated); border-radius: var(--radius-sm); gap: var(--space-sm);">
+                                        <code style="font-size: var(--font-size-xs); word-break: break-all;">${Utils.dom.escapeHTML(ep.url)}</code>
+                                        <button
+                                            onclick="DiscoveredEndpointsPanel.exclude('${appId}', '${ep.endpoint_id}')"
+                                            style="flex-shrink:0; font-size: 10px; padding: 2px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: transparent; cursor: pointer; color: var(--color-text-tertiary); white-space:nowrap;"
+                                            title="Exclude from health checks">
+                                            Exclude
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${excluded.length > 0 ? `
+                        <div>
+                            <p style="font-size: var(--font-size-xs); font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-sm);">
+                                <i class="ph ph-eye-slash" style="color: var(--color-text-tertiary);"></i>
+                                Excluded (${excluded.length}) — skipped during health checks
+                            </p>
+                            <div style="display: flex; flex-direction: column; gap: var(--space-xs);">
+                                ${excluded.map(ep => `
+                                    <div style="display:flex; align-items:center; justify-content:space-between; padding: var(--space-xs) var(--space-sm); background: var(--color-surface-elevated); border-radius: var(--radius-sm); gap: var(--space-sm); opacity: 0.5;">
+                                        <code style="font-size: var(--font-size-xs); word-break: break-all; text-decoration: line-through;">${Utils.dom.escapeHTML(ep.url)}</code>
+                                        <button
+                                            onclick="DiscoveredEndpointsPanel.include('${appId}', '${ep.endpoint_id}')"
+                                            style="flex-shrink:0; font-size: 10px; padding: 2px 8px; border: 1px solid var(--color-success); border-radius: var(--radius-sm); background: transparent; cursor: pointer; color: var(--color-success); white-space:nowrap;"
+                                            title="Re-include in health checks">
+                                            Include
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                `}
+            </div>
+        </div>`;
+    },
+
+    async triggerRecrawl(appId) {
+        try {
+            await API.discovery.triggerCrawl(appId);
+            if (typeof showToast === 'function') showToast('Crawl started — refresh in a few seconds', 'success');
+        } catch (err) {
+            if (typeof showToast === 'function') showToast(`Crawl failed: ${err.message}`, 'error');
+        }
+    },
+
+    async exclude(appId, endpointId) {
+        try {
+            await API.discovery.excludeEndpoint(appId, endpointId);
+            await DiscoveredEndpointsPanel.refresh(appId);
+        } catch (err) {
+            if (typeof showToast === 'function') showToast(`Error: ${err.message}`, 'error');
+        }
+    },
+
+    async include(appId, endpointId) {
+        try {
+            await API.discovery.includeEndpoint(appId, endpointId);
+            await DiscoveredEndpointsPanel.refresh(appId);
+        } catch (err) {
+            if (typeof showToast === 'function') showToast(`Error: ${err.message}`, 'error');
+        }
+    },
+
+    async refresh(appId) {
+        const container = document.getElementById('discovered-endpoints-panel');
+        if (!container) return;
+        try {
+            const data = await API.discovery.listEndpoints(appId);
+            const panel = document.createElement('div');
+            panel.innerHTML = DiscoveredEndpointsPanel.render(appId, data.endpoints || []);
+            container.replaceWith(panel.firstElementChild);
+        } catch (err) {
+            // Silent — panel will update on next full page refresh
+        }
+    }
+};
+
+Components.DiscoveredEndpointsPanel = DiscoveredEndpointsPanel;
+
+
+// ============================================================================
+// Version Badges (inline helper used in app detail view)
+// ============================================================================
+
+const VersionBadges = {
+    /**
+     * Render two version badges for docker_image_version and app_version.
+     * Returns empty string if both are null.
+     */
+    render(app) {
+        const badges = [];
+
+        if (app.docker_image_version) {
+            badges.push(`
+                <span title="Docker image tag" style="display:inline-flex; align-items:center; gap:4px; padding: 2px 10px; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 600; background: rgba(99,102,241,0.12); color: #6366f1;">
+                    <i class="ph ph-cube"></i> ${Utils.dom.escapeHTML(app.docker_image_version)}
+                </span>
+            `);
+        }
+
+        if (app.app_version) {
+            badges.push(`
+                <span title="App version (from /version endpoint)" style="display:inline-flex; align-items:center; gap:4px; padding: 2px 10px; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 600; background: rgba(20,184,166,0.12); color: #14b8a6;">
+                    <i class="ph ph-git-branch"></i> ${Utils.dom.escapeHTML(app.app_version)}
+                </span>
+            `);
+        }
+
+        return badges.length > 0
+            ? `<div style="display:flex; flex-wrap:wrap; gap: var(--space-xs); margin-top: var(--space-xs);">${badges.join('')}</div>`
+            : '';
+    }
+};
+
+Components.VersionBadges = VersionBadges;

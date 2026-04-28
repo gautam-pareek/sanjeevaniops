@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Crash events older than this are automatically deleted (default: 24 hours)
     crash_event_retention_minutes: int = 1440
 
+    # Auto endpoint discovery crawler settings
+    crawl_max_pages: int = 50          # Max URLs stored per app per crawl
+    crawl_timeout_seconds: int = 5     # Per-request timeout during crawl
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

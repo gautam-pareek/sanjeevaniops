@@ -50,6 +50,12 @@ class HttpHealthCheckConfig(BaseModel):
         description="If True, response body must be valid JSON."
     )
 
+    # Version tracking: optional endpoint that returns the app's current version
+    version_endpoint: Optional[str] = Field(
+        default=None,
+        description="Path to call for app version (e.g. '/version'). GET, plain text or JSON with 'version' key."
+    )
+
     @field_validator('url')
     @classmethod
     def validate_url(cls, v: str) -> str:

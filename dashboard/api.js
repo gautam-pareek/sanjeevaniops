@@ -273,3 +273,45 @@ const HealthAPI = {
 API.health = HealthAPI;
 
 console.log('Health API methods loaded');
+
+// Discovery API endpoints
+const DiscoveryAPI = {
+    /**
+     * Trigger a background crawl to discover endpoints for an app.
+     */
+    async triggerCrawl(appId) {
+        return await apiFetch(`/applications/${appId}/discover`, { method: 'POST' });
+    },
+
+    /**
+     * List all discovered endpoints (active + excluded) for an app.
+     */
+    async listEndpoints(appId) {
+        return await apiFetch(`/applications/${appId}/discovered-endpoints`);
+    },
+
+    /**
+     * Exclude a discovered endpoint from health checks.
+     */
+    async excludeEndpoint(appId, endpointId) {
+        const operator = localStorage.getItem('operator') || 'admin';
+        return await apiFetch(
+            `/applications/${appId}/discovered-endpoints/${endpointId}/exclude?operator=${encodeURIComponent(operator)}`,
+            { method: 'PUT' }
+        );
+    },
+
+    /**
+     * Re-include a previously excluded endpoint.
+     */
+    async includeEndpoint(appId, endpointId) {
+        const operator = localStorage.getItem('operator') || 'admin';
+        return await apiFetch(
+            `/applications/${appId}/discovered-endpoints/${endpointId}/include?operator=${encodeURIComponent(operator)}`,
+            { method: 'PUT' }
+        );
+    }
+};
+
+API.discovery = DiscoveryAPI;
+console.log('Discovery API methods loaded');

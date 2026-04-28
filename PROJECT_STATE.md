@@ -1,6 +1,6 @@
 # SanjeevaniOps — Project State
 
-Last updated: 2026-04-11 (Session 9)
+Last updated: 2026-04-16 (Session 10)
 
 ---
 
@@ -72,6 +72,22 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 - Migration: `005_recovery_actions.sql`
 - Endpoints: `POST /{event_id}/restart`, `GET /{app_id}/recovery-actions`
 
+### Feature 7: Auto Endpoint Discovery ✅
+- On demand (or on registration): background crawler fetches app's base URL and extracts all same-domain HTML links
+- Depth-1, stdlib-only (`urllib` + `html.parser`), max 50 pages, skips static assets
+- Discovered endpoints stored in `discovered_endpoints` table (migration 006)
+- Each endpoint has `status`: `active` (included in health checks) or `excluded` (skipped without deletion)
+- Discovered endpoints are automatically passed as additional sub-checks on every HTTP health check
+- New files: `backend/api/v1/discovery.py`, `backend/services/discovery_service.py`, `backend/repositories/discovery_repository.py`, `monitoring/link_crawler.py`
+- API: `POST /applications/{app_id}/discover` (202), `GET /applications/{app_id}/discovered-endpoints`, `PUT …/exclude`, `PUT …/include`
+
+### Feature 8: Version Tracking ✅
+- `docker_image_version` — auto-parsed from running container's Docker image tag (e.g. `nginx:1.19` → `"1.19"`); updated on every health check
+- `app_version` — polled from optional `version_endpoint` path in HTTP health check config (plain text or JSON `version`/`app_version` key)
+- Version polling never affects health status — endpoint errors are silently ignored
+- New columns in `applications` table (migration 007); new field `version_endpoint` in `HttpHealthCheckConfig`
+- `CheckResult` carries `version_string`; `monitor_service` persists it back to the app record after each check
+
 ---
 
 ## Bugs Fixed This Project
@@ -130,12 +146,14 @@ Sub-checks stored in DB, displayed in dashboard with ✅/❌ per check.
 | 003_monitoring_pause.sql | ✅ Applied | monitoring_paused, paused_at, paused_by, pause_reason |
 | 004_crash_events.sql | ✅ Applied | crash_events table with ai_analysis, ai_analyzed_at |
 | 005_recovery_actions.sql | ✅ Applied | recovery_actions audit log table |
+| 006_discovered_endpoints.sql | ✅ Applied | discovered_endpoints table (auto-crawl results, active/excluded) |
+| 007_version_tracking.sql | ✅ Applied | docker_image_version + app_version columns on applications |
 
 ---
 
 ## In Progress / Next
 
-All planned features are complete. The project is in verification/testing phase.
+All planned features are complete. Session 10 added auto endpoint discovery and version tracking.
 
 ---
 

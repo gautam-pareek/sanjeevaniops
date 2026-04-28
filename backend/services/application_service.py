@@ -112,6 +112,21 @@ class ApplicationService:
             import logging
             logging.getLogger(__name__).warning("Could not add app to scheduler: %s", e)
 
+        # Trigger background endpoint discovery for HTTP apps
+        try:
+            hc = request.health_check.model_dump()
+            if hc.get("type") == "http":
+                import urllib.parse
+                from backend.services.discovery_service import DiscoveryService
+                raw_url: str = hc.get("config", {}).get("url", "")
+                if raw_url:
+                    parsed = urllib.parse.urlparse(raw_url)
+                    base_url = f"{parsed.scheme}://{parsed.netloc}"
+                    DiscoveryService().trigger_crawl(app_id, base_url)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Could not trigger endpoint discovery: %s", e)
+
         return self._build_application_response(app_data, container_info)
     
     def get_application(
@@ -272,10 +287,11 @@ class ApplicationService:
         if not container_info:
             container_info = {
                 'image': 'unknown',
+                'docker_image_version': None,
                 'status': 'not running',
                 'created_at': app_data['registered_at']
             }
-        
+
         return ApplicationResponse(
             app_id=app_data['app_id'],
             name=app_data['name'],
@@ -296,6 +312,9 @@ class ApplicationService:
             container_info=ContainerInfo(
                 image=container_info['image'],
                 status=container_info['status'],
-                created_at=container_info['created_at']
-            )
+                created_at=container_info['created_at'],
+                docker_image_version=container_info.get('docker_image_version'),
+            ),
+            docker_image_version=app_data.get('docker_image_version'),
+            app_version=app_data.get('app_version'),
         )

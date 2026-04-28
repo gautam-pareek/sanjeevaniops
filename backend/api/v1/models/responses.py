@@ -34,6 +34,7 @@ class ContainerInfo(BaseModel):
     image: str
     status: str
     created_at: datetime
+    docker_image_version: Optional[str] = None  # parsed image tag, e.g. "1.19"
 
 
 class ContainerVerification(BaseModel):
@@ -75,6 +76,8 @@ class ApplicationResponse(BaseModel):
     metadata: Dict[str, Any]
     registration_info: RegistrationInfo
     container_info: ContainerInfo
+    docker_image_version: Optional[str] = None  # auto-detected Docker image tag
+    app_version: Optional[str] = None           # from configured version_endpoint
 
 
 class PaginatedApplicationList(BaseModel):

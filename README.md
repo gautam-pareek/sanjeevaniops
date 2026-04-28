@@ -46,6 +46,8 @@ SanjeevaniOps monitors your local Docker containers, detects failures the moment
 | Recovery Actions | ✅ Complete | Human-approved container restart with full audit trail |
 | Auto-Recovery Engine | ✅ Complete | Policy-driven auto-restart with exponential backoff + attempt limiting |
 | Broken Redirect Detection | ✅ Complete | Detects 302→404 chains — playbook routes to nginx.conf, not missing file |
+| Auto Endpoint Discovery | ✅ Complete | Crawls app base URL on demand, discovers all routes, include/exclude per endpoint |
+| Version Tracking | ✅ Complete | Parses Docker image tag; optionally polls a `/version` endpoint each health check |
 
 ---
 
@@ -199,6 +201,25 @@ The attempt counter resets when the app recovers, so a new failure episode gets 
 
 SanjeevaniOps detects broken redirect chains — not just missing files. If a monitored endpoint returns a 302 and the final destination returns 404, the sub-check records the full chain (e.g. `/checkout → 302 → /chekout.html → 404`). The playbook correctly points to the **nginx config**, not to a missing file, because the file path is a symptom of a misconfigured redirect.
 
+### Auto Endpoint Discovery
+
+Register an app and SanjeevaniOps can automatically discover all its routes — no manual typing. Trigger a crawl via the dashboard or `POST /applications/{app_id}/discover`. The crawler:
+
+- Fetches the app's base URL (derived from the configured HTTP health check URL)
+- Extracts all same-domain `<a href>` links from the HTML
+- Depth-1 only — does not recurse; max 50 pages
+- Skips static assets (`.css`, `.js`, `.png`, etc.) — only HTML routes are stored
+- Runs in a background thread (returns 202 immediately)
+
+Discovered endpoints are stored in `discovered_endpoints` and automatically included as additional sub-checks on every health check. Any endpoint can be excluded without deletion — it will be skipped from future checks but stays in the list.
+
+### Version Tracking
+
+Two version signals are tracked per app:
+
+- **`docker_image_version`** — the image tag parsed from the running container's Docker image (e.g. `nginx:1.19` → `"1.19"`). Auto-detected on every health check.
+- **`app_version`** — polled from an optional `version_endpoint` path configured on the HTTP health check (e.g. `/version`). The endpoint can return plain text or JSON with a `version` / `app_version` key. Version polling **never affects health status** — a missing or erroring version endpoint does not trigger a failure.
+
 ### Continue in Chat
 
 Click **"Continue in Chat"** after an analysis to jump to the AI Engine tab. The crash context — including root cause, severity, recovery playbook steps, and files to inspect — is automatically sent to the scoped AI chat assistant so it can reason from evidence rather than guessing.
@@ -248,6 +269,15 @@ Click **"Continue in Chat"** after an analysis to jump to the AI Engine tab. The
 |--------|----------|-------------|
 | `POST` | `/api/v1/applications/{app_id}/crash-events/{event_id}/restart` | Restart container (human-approved) |
 | `GET` | `/api/v1/applications/{app_id}/recovery-actions` | Recovery audit log |
+
+### Auto Endpoint Discovery
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/applications/{app_id}/discover` | Trigger background crawl (returns 202 immediately) |
+| `GET` | `/api/v1/applications/{app_id}/discovered-endpoints` | List all discovered endpoints (active + excluded) |
+| `PUT` | `/api/v1/applications/{app_id}/discovered-endpoints/{endpoint_id}/exclude` | Mark endpoint as excluded |
+| `PUT` | `/api/v1/applications/{app_id}/discovered-endpoints/{endpoint_id}/include` | Re-include a previously excluded endpoint |
 
 ---
 
@@ -300,22 +330,26 @@ sanjeevaniops/
 │   │   └── v1/
 │   │       ├── applications.py
 │   │       ├── health.py
+│   │       ├── discovery.py       ← auto endpoint discovery routes
 │   │       └── models/
 │   ├── core/
-│   │   ├── config.py          ← ollama_model setting here
+│   │   ├── config.py              ← ollama_model setting here
 │   │   └── database.py
 │   ├── services/
 │   │   ├── application_service.py
 │   │   ├── docker_service.py
+│   │   ├── discovery_service.py   ← orchestrates background crawl
 │   │   └── validation_service.py
 │   ├── repositories/
 │   │   ├── application_repository.py
 │   │   ├── health_repository.py
+│   │   ├── discovery_repository.py ← persists discovered_endpoints
 │   │   ├── container_cache_repository.py
 │   │   └── recovery_repository.py
 │   └── exceptions/
 ├── monitoring/
 │   ├── health_checker.py
+│   ├── link_crawler.py            ← stdlib HTML crawler (no deps)
 │   ├── monitor_service.py
 │   └── monitor_scheduler.py
 ├── ai_engine/
@@ -333,7 +367,9 @@ sanjeevaniops/
 │   ├── 002_health_check_monitoring.sql
 │   ├── 003_monitoring_pause.sql
 │   ├── 004_crash_events.sql
-│   └── 005_recovery_actions.sql
+│   ├── 005_recovery_actions.sql
+│   ├── 006_discovered_endpoints.sql ← auto-crawl endpoint store
+│   └── 007_version_tracking.sql     ← docker_image_version + app_version columns
 ├── testsite/           ← demo: 404 on /settings.html
 ├── testsite2/          ← demo: body keyword failure (200 but "500 error" text)
 ├── testsite3/          ← demo: broken redirect /checkout → 302 → /chekout.html → 404
@@ -351,6 +387,8 @@ sanjeevaniops/
 | `003_monitoring_pause.sql` | Pause/resume per app |
 | `004_crash_events.sql` | Crash events with Docker logs + AI analysis fields |
 | `005_recovery_actions.sql` | Recovery actions audit log |
+| `006_discovered_endpoints.sql` | Auto-crawled endpoints store with active/excluded status |
+| `007_version_tracking.sql` | `docker_image_version` + `app_version` columns on applications |
 
 ---
 

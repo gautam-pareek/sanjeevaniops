@@ -97,7 +97,8 @@ class ApplicationRepository:
             SELECT app_id, name, description, container_name, container_id,
                    status, health_check_config, recovery_policy_config, metadata,
                    registered_at, registered_by, last_updated_at, last_updated_by,
-                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason
+                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason,
+                   docker_image_version, app_version
             FROM applications
             WHERE app_id = ?
         """
@@ -149,7 +150,8 @@ class ApplicationRepository:
             SELECT app_id, name, description, container_name, container_id,
                    status, health_check_config, recovery_policy_config, metadata,
                    registered_at, registered_by, last_updated_at, last_updated_by,
-                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason
+                   version, deleted_at, monitoring_paused, paused_at, paused_by, pause_reason,
+                   docker_image_version, app_version
             FROM applications
             WHERE {where_sql}
             ORDER BY registered_at DESC
@@ -380,6 +382,38 @@ class ApplicationRepository:
         
         return history, total
     
+    def update_version_info(
+        self,
+        conn: sqlite3.Connection,
+        app_id: str,
+        docker_image_version: Optional[str] = None,
+        app_version: Optional[str] = None,
+    ) -> None:
+        """
+        Silently update version fields without touching the optimistic-lock
+        version counter or creating a history entry. Called by the monitor
+        service after each health check cycle.
+        """
+        updates = []
+        params: List[Any] = []
+
+        if docker_image_version is not None:
+            updates.append("docker_image_version = ?")
+            params.append(docker_image_version)
+
+        if app_version is not None:
+            updates.append("app_version = ?")
+            params.append(app_version)
+
+        if not updates:
+            return
+
+        params.append(app_id)
+        conn.execute(
+            f"UPDATE applications SET {', '.join(updates)} WHERE app_id = ?",
+            params,
+        )
+
     def set_monitoring_paused(
         self,
         conn: sqlite3.Connection,
@@ -498,5 +532,7 @@ class ApplicationRepository:
             'monitoring_paused': bool(row['monitoring_paused']),
             'paused_at': datetime.fromisoformat(row['paused_at']) if row['paused_at'] else None,
             'paused_by': row['paused_by'],
-            'pause_reason': row['pause_reason']
+            'pause_reason': row['pause_reason'],
+            'docker_image_version': row['docker_image_version'],
+            'app_version': row['app_version'],
         }

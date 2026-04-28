@@ -14,6 +14,23 @@ from backend.exceptions.custom_exceptions import (
 )
 
 
+def _parse_image_version(image: str) -> str:
+    """
+    Extract the version tag from a Docker image string.
+
+    Examples:
+        "nginx:1.19"        -> "1.19"
+        "myapp:v2.1.0"      -> "v2.1.0"
+        "ubuntu"            -> "latest"
+        "registry/img:sha"  -> "sha"
+    """
+    if not image:
+        return "unknown"
+    if ":" in image:
+        return image.rsplit(":", 1)[1]
+    return "latest"
+
+
 class DockerService:
     """Service for Docker container inspection and verification."""
     
@@ -106,7 +123,7 @@ class DockerService:
     def _extract_container_info(self, container) -> Dict[str, Any]:
         """Extract relevant container information."""
         attrs = container.attrs
-        
+
         # Parse created timestamp
         created_str = attrs.get('Created', '')
         try:
@@ -114,11 +131,14 @@ class DockerService:
             created_at = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             created_at = datetime.now()
-        
+
+        image = attrs.get('Config', {}).get('Image', '')
+
         return {
             'container_id': container.id,
             'container_name': container.name,
-            'image': attrs.get('Config', {}).get('Image', ''),
+            'image': image,
+            'docker_image_version': _parse_image_version(image),
             'status': container.status,
             'created_at': created_at,
             'docker_inspect': attrs  # Full inspect output for caching

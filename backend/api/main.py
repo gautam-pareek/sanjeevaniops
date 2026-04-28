@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from backend.core.config import settings
 from backend.core.database import db
 from backend.api.v1 import applications, health
+from backend.api.v1 import discovery
 from backend.repositories.application_repository import ApplicationRepository
 from monitoring.monitor_scheduler import scheduler
 
@@ -27,6 +28,8 @@ async def lifespan(app: FastAPI):
         db.execute_migration("migrations/003_monitoring_pause.sql")
         db.execute_migration("migrations/004_crash_events.sql")
         db.execute_migration("migrations/005_recovery_actions.sql")
+        db.execute_migration("migrations/006_discovered_endpoints.sql")
+        db.execute_migration("migrations/007_version_tracking.sql")
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database initialization failed: {e}")
@@ -73,6 +76,10 @@ app.include_router(
 )
 app.include_router(
     health.router,
+    prefix=settings.api_v1_prefix
+)
+app.include_router(
+    discovery.router,
     prefix=settings.api_v1_prefix
 )
 

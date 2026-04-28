@@ -32,7 +32,8 @@ const RegistrationWizard = {
                     critical_response_time_ms: 5000,
                     error_keywords: [],
                     additional_endpoints: [],
-                    expect_json: false
+                    expect_json: false,
+                    version_endpoint: ''
                 }
             },
             recovery_policy: {
@@ -281,7 +282,7 @@ const RegistrationWizard = {
                             class="form-input" 
                             value="${(config.expected_status_codes || [200]).join(',')}"
                             placeholder="200,201,204"
-                            onchange="RegistrationWizard.updateField('health_check.config.expected_status_codes', this.value.split(',').map(n => parseInt(n.trim())))">
+                            onchange="RegistrationWizard.updateField('health_check.config.expected_status_codes', this.value.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)))">
                     </div>
                     <h4 style="margin: var(--space-lg) 0 var(--space-md);">Enhanced Detection</h4>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
@@ -315,7 +316,17 @@ const RegistrationWizard = {
                             placeholder="/api/health&#10;/about&#10;http://localhost:8080/api/status"
                             style="resize:vertical;"
                             oninput="RegistrationWizard.updateField('health_check.config.additional_endpoints', this.value.split('\n').map(s=>s.trim()).filter(Boolean))">${(config.additional_endpoints || []).join('\n')}</textarea>
-                        <span class="form-hint">Check reachability of extra routes (max 5)</span>
+                        <span class="form-hint">Check reachability of extra routes (max 5). More routes auto-discovered after registration.</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Version Endpoint <span style="font-weight:normal; color:var(--color-text-secondary);">(optional)</span></label>
+                        <input
+                            type="text"
+                            class="form-input"
+                            value="${config.version_endpoint || ''}"
+                            placeholder="/version"
+                            oninput="RegistrationWizard.updateField('health_check.config.version_endpoint', this.value.trim() || null)">
+                        <span class="form-hint">Path that returns the app's version (plain text or JSON with a "version" key). Tracked automatically each health check.</span>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
                         <div class="form-group">
@@ -603,8 +614,59 @@ const RegistrationWizard = {
         }
     },
 
+    validateStep(step) {
+        const errors = [];
+        const fd = this.formData;
+
+        if (step === 1) {
+            if (!fd.name || fd.name.trim().length < 3) {
+                errors.push('Application name must be at least 3 characters.');
+            }
+            if (!fd.container_name || fd.container_name.trim().length < 1) {
+                errors.push('Container name is required.');
+            }
+        }
+
+        if (step === 2) {
+            const hc = fd.health_check;
+            if (hc.type === 'http') {
+                const url = (hc.config.url || '').trim();
+                if (!url) {
+                    errors.push('Health check URL is required.');
+                } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                    errors.push('Health check URL must start with http:// or https://');
+                }
+                if (hc.timeout_seconds >= hc.interval_seconds) {
+                    errors.push(`Timeout (${hc.timeout_seconds}s) must be less than interval (${hc.interval_seconds}s).`);
+                }
+                const warn = hc.config.warn_response_time_ms;
+                const crit = hc.config.critical_response_time_ms;
+                if (warn >= crit) {
+                    errors.push(`Warn threshold (${warn}ms) must be less than critical threshold (${crit}ms).`);
+                }
+            }
+            if (hc.type === 'tcp') {
+                if (!hc.config.port) {
+                    errors.push('TCP port is required.');
+                }
+            }
+            if (hc.type === 'exec') {
+                if (!hc.config.command || !hc.config.command.trim()) {
+                    errors.push('Exec command is required.');
+                }
+            }
+        }
+
+        return errors;
+    },
+
     nextStep() {
         this.collectCurrentStepValues();
+        const errors = this.validateStep(this.currentStep);
+        if (errors.length > 0) {
+            showToast(errors[0], 'error');
+            return;
+        }
         if (this.currentStep < this.totalSteps) {
             this.currentStep++;
             this.refresh();
@@ -627,6 +689,16 @@ const RegistrationWizard = {
 
     async submit() {
         this.collectCurrentStepValues();
+
+        // Validate all steps before hitting the API
+        for (let s = 1; s <= this.totalSteps; s++) {
+            const errors = this.validateStep(s);
+            if (errors.length > 0) {
+                showToast(errors[0], 'error');
+                return;
+            }
+        }
+
         try {
             showLoading(true);
 
